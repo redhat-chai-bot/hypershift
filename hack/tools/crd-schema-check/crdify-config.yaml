@@ -14,12 +14,13 @@
 #
 #   - enum additions: allowed (clients must tolerate unknown values)
 #   - description changes: warn-only (text changes are never API-breaking)
+#   - pattern changes: warn-only (validation changes are reviewed explicitly)
 #   - new min/max constraints: warn-only (API server ratchets existing data)
 #   - field removals: warn-only (vendored type restructuring, reviewed upstream)
 #   - type changes: warn-only (accompanies field removals in vendored types)
 #
-# Remaining defaults (Error): required, scope, storedVersionRemoval, pattern,
-# nullable, default.
+# Remaining defaults (Error): required, scope, storedVersionRemoval, nullable,
+# default.
 #
 # crdify doesn't have comparators for all schema fields yet (e.g.
 # XValidations/CEL rules), so unhandled diffs are warnings rather than
@@ -32,6 +33,8 @@ validations:
     configuration:
       additionPolicy: Allow
   - name: description
+    enforcement: Warn
+  - name: pattern
     enforcement: Warn
   - name: existingFieldRemoval
     enforcement: Warn
