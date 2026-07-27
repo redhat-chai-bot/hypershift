@@ -83,24 +83,26 @@ type HostedClusterConfigOperatorConfig struct {
 	kubeClient kubeclient.Interface
 }
 
-func Mgr(ctx context.Context, cfg, cpConfig *rest.Config, namespace string, hcpName string) ctrl.Manager {
+func Mgr(ctx context.Context, cfg, cpConfig *rest.Config, namespace string, hcpName string) (ctrl.Manager, error) {
 	l := log.FromContext(ctx)
 	ct, err := client.New(cpConfig, client.Options{Scheme: hyperapi.Scheme})
 	if err != nil {
-		panic(fmt.Sprintf("failed to create client: %v", err))
+		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 	hcp := resourcemanifests.HostedControlPlane(namespace, hcpName)
 
-	// Retry getting HCP to handle transient connectivity issues
-	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+	// Retry getting HCP to handle transient connectivity issues during startup.
+	// Use a 2-minute timeout to tolerate API server unavailability during concurrent
+	// hosted cluster creation.
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
 		if err := ct.Get(ctx, client.ObjectKeyFromObject(hcp), hcp); err != nil {
-			l.Error(err, "failed to get HCP, retrying", "namespace", namespace, "hcpName", hcpName)
+			l.Info("failed to get HCP, retrying", "error", err, "namespace", namespace, "hcpName", hcpName)
 			return false, nil // Retry
 		}
 		return true, nil // Success
 	})
 	if err != nil {
-		panic(fmt.Sprintf("unable to get HCP after retries: %v", err))
+		return nil, fmt.Errorf("unable to get HCP after retries: %w", err)
 	}
 
 	cfg.UserAgent = config.HCCOUserAgent
@@ -180,17 +182,17 @@ func Mgr(ctx context.Context, cfg, cpConfig *rest.Config, namespace string, hcpN
 		Scheme: api.Scheme,
 	})
 	if err != nil {
-		panic(fmt.Sprintf("failed to create controller manager: %v", err))
+		return nil, fmt.Errorf("failed to create controller manager: %w", err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		panic(fmt.Sprintf("unable to set up health check: %v", err))
+		return nil, fmt.Errorf("unable to set up health check: %w", err)
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		panic(fmt.Sprintf("unable to set up ready check: %v", err))
+		return nil, fmt.Errorf("unable to set up ready check: %w", err)
 	}
 
-	return mgr
+	return mgr, nil
 }
 
 func CfgFromFile(path string) *rest.Config {

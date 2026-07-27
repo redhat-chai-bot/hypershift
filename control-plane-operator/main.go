@@ -254,11 +254,17 @@ func NewStartCommand() *cobra.Command {
 			setupLog.Error(err, "unable to start manager")
 			os.Exit(1)
 		}
-		if err = mgr.GetFieldIndexer().IndexField(ctx, &corev1.Event{}, events.EventInvolvedObjectUIDField, func(object crclient.Object) []string {
-			event := object.(*corev1.Event)
-			return []string{string(event.InvolvedObject.UID)}
+		if err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+			if err := mgr.GetFieldIndexer().IndexField(ctx, &corev1.Event{}, events.EventInvolvedObjectUIDField, func(object crclient.Object) []string {
+				event := object.(*corev1.Event)
+				return []string{string(event.InvolvedObject.UID)}
+			}); err != nil {
+				setupLog.Info("failed to setup event involvedObject.uid index, retrying", "error", err)
+				return false, nil
+			}
+			return true, nil
 		}); err != nil {
-			setupLog.Error(err, "failed to setup event involvedObject.uid index")
+			setupLog.Error(err, "failed to setup event involvedObject.uid index after retries")
 			os.Exit(1)
 		}
 

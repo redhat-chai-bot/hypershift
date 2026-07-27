@@ -1,8 +1,12 @@
 package capabilities
 
 import (
+	stderrors "errors"
 	"fmt"
+	"net"
+	"net/url"
 	"sync"
+	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
 	imagestreamv1 "github.com/openshift/api/image/v1"
@@ -12,6 +16,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 
 	"github.com/blang/semver"
@@ -133,7 +138,69 @@ type ManagementClusterDiscoveryClient interface {
 	discovery.ServerVersionInterface
 }
 
+// isTransientError returns true for errors that indicate temporary API server
+// unavailability, such as connection refused, TLS handshake timeouts, or HTTP 503.
+// These errors are safe to retry because the API server is expected to recover.
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// HTTP 503 Service Unavailable
+	if errors.IsServiceUnavailable(err) {
+		return true
+	}
+	// HTTP 429 Too Many Requests
+	if errors.IsTooManyRequests(err) {
+		return true
+	}
+	// HTTP 500 Internal Server Error
+	if errors.IsInternalError(err) {
+		return true
+	}
+	// Connection refused, TLS handshake timeout, or other network errors
+	var netErr *net.OpError
+	if stderrors.As(err, &netErr) {
+		return true
+	}
+	var urlErr *url.Error
+	if stderrors.As(err, &urlErr) {
+		return true
+	}
+	return false
+}
+
+// defaultDetectBackoff is the default backoff for retrying transient errors during
+// management cluster capability detection. It retries up to 5 times with exponential
+// backoff starting at 1 second, capping at ~30 seconds total.
+var defaultDetectBackoff = wait.Backoff{
+	Duration: 1 * time.Second,
+	Factor:   2.0,
+	Jitter:   0.1,
+	Steps:    5,
+}
+
 func DetectManagementClusterCapabilities(client ManagementClusterDiscoveryClient) (*ManagementClusterCapabilities, error) {
+	var result *ManagementClusterCapabilities
+	err := wait.ExponentialBackoff(defaultDetectBackoff, func() (bool, error) {
+		caps, detectErr := detectManagementClusterCapabilities(client)
+		if detectErr != nil {
+			if isTransientError(detectErr) {
+				// Transient error — retry
+				return false, nil
+			}
+			// Non-transient error — fail immediately
+			return false, detectErr
+		}
+		result = caps
+		return true, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect management cluster capabilities: %w", err)
+	}
+	return result, nil
+}
+
+func detectManagementClusterCapabilities(client ManagementClusterDiscoveryClient) (*ManagementClusterCapabilities, error) {
 	discoveredCapabilities := map[CapabilityType]struct{}{}
 
 	// check for route capability
