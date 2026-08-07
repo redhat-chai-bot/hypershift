@@ -87,8 +87,6 @@ func TestCreateCluster(t *testing.T) {
 		t.Logf("fetching mgmt kubeconfig")
 		mgmtCfg, err := e2eutil.GetConfig()
 		g.Expect(err).NotTo(HaveOccurred(), "couldn't get mgmt kubeconfig")
-		mgmtCfg.QPS = -1
-		mgmtCfg.Burst = -1
 
 		mgmtClients, err := integrationframework.NewClients(mgmtCfg)
 		g.Expect(err).NotTo(HaveOccurred(), "couldn't create mgmt clients")
@@ -187,8 +185,6 @@ func TestCreateClusterHABreakGlassCredentials(t *testing.T) {
 		t.Logf("fetching mgmt kubeconfig")
 		mgmtCfg, err := e2eutil.GetConfig()
 		g.Expect(err).NotTo(HaveOccurred(), "couldn't get mgmt kubeconfig")
-		mgmtCfg.QPS = -1
-		mgmtCfg.Burst = -1
 
 		mgmtClients, err := integrationframework.NewClients(mgmtCfg)
 		g.Expect(err).NotTo(HaveOccurred(), "couldn't create mgmt clients")

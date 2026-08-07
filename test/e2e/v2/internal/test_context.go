@@ -108,8 +108,8 @@ func (tc *TestContext) getHostedClusterRESTConfig() *rest.Config {
 	if err != nil {
 		panic(fmt.Sprintf("failed to create REST config from kubeconfig: %v", err))
 	}
-	restConfig.QPS = 200
-	restConfig.Burst = 300
+	restConfig.QPS = -1
+	restConfig.Burst = -1
 
 	return restConfig
 }

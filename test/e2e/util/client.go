@@ -17,10 +17,12 @@ func GetConfig() (*rest.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Increased QPS and Burst to handle multiple parallel tests and polling operations
-	// Previous values (QPS=100, Burst=100) were insufficient for concurrent NodePool polling
-	cfg.QPS = 200
-	cfg.Burst = 300
+	// Disable client-side throttling for the management client. Server-side
+	// priority-and-fairness is sufficient; fixed caps cause context deadline
+	// exceeded with 20+ parallel tests. This matches the pattern used for
+	// guest cluster clients.
+	cfg.QPS = -1
+	cfg.Burst = -1
 	cfg.Timeout = 5 * time.Minute
 	return cfg, nil
 }
