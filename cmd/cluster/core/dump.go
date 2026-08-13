@@ -347,6 +347,18 @@ func DumpCluster(ctx context.Context, opts *DumpOptions) error {
 			return err
 		}
 	}
+	// Fetch the HostedCluster to determine the platform type for filtering
+	// platform-specific resources. If the HostedCluster cannot be fetched
+	// (e.g. it has been deleted), platformType remains empty and the fallback
+	// in platformSpecificResources includes all platform resources.
+	hostedCluster := &hyperv1.HostedCluster{}
+	var platformType hyperv1.PlatformType
+	if err := c.Get(ctx, client.ObjectKey{Namespace: opts.Namespace, Name: opts.Name}, hostedCluster); err != nil {
+		opts.Log.Error(err, "Failed to get HostedCluster, including all platform-specific resources in dump")
+	} else {
+		platformType = hostedCluster.Spec.Platform.Type
+	}
+
 	allNodePools := &hyperv1.NodePoolList{}
 	if err = c.List(ctx, allNodePools, client.InNamespace(opts.Namespace)); err != nil {
 		opts.Log.Error(err, "Cannot list nodepools")
@@ -389,27 +401,15 @@ func DumpCluster(ctx context.Context, opts *DumpOptions) error {
 		&capiv1.Machine{},
 		&capiv1.MachineSet{},
 		&hyperv1.HostedControlPlane{},
-		&capiaws.AWSMachine{},
-		&capiaws.AWSMachineTemplate{},
-		&capiaws.AWSCluster{},
-		&hyperv1.AWSEndpointService{},
-		&capiazure.AzureCluster{},
-		&capiazure.AzureMachine{},
-		&capiazure.AzureMachineTemplate{},
-		&capiopenstackv1alpha1.OpenStackServer{},
-		&capiopenstackv1beta1.OpenStackCluster{},
-		&capiopenstackv1beta1.OpenStackMachine{},
-		&capiopenstackv1beta1.OpenStackMachineTemplate{},
-		&orcv1alpha1.Image{},
-		&agentv1.AgentMachine{},
-		&agentv1.AgentMachineTemplate{},
-		&agentv1.AgentCluster{},
-		&capikubevirt.KubevirtMachine{},
-		&capikubevirt.KubevirtMachineTemplate{},
-		&capikubevirt.KubevirtCluster{},
 		&policyv1.PodDisruptionBudget{},
 		&networkingv1.NetworkPolicy{},
 	)
+
+	// Only include platform-specific CRD types that match the HostedCluster's
+	// platform. Including CRD types that don't exist on the cluster causes
+	// oc adm inspect to exit with status 1, dropping ALL resources including
+	// core ones like pods, events, and deployments.
+	resources = append(resources, platformSpecificResources(platformType)...)
 
 	// These resources are not required to exist since they
 	// are live behind a feature gate. Therefore, we'll
@@ -916,4 +916,73 @@ func isResourceRegistered(discoveryClient discovery.DiscoveryInterface, gvk sche
 		}
 	}
 	return false, nil
+}
+
+// platformSpecificResources returns the platform-specific CAPI resources to
+// include in an oc adm inspect call based on the HostedCluster's platform type.
+// When platformType is empty (e.g. the HostedCluster could not be fetched), all
+// platform-specific resources are returned as a fallback.
+func platformSpecificResources(platformType hyperv1.PlatformType) []client.Object {
+	switch platformType {
+	case hyperv1.AWSPlatform:
+		return []client.Object{
+			&capiaws.AWSMachine{},
+			&capiaws.AWSMachineTemplate{},
+			&capiaws.AWSCluster{},
+			&hyperv1.AWSEndpointService{},
+		}
+	case hyperv1.AzurePlatform:
+		return []client.Object{
+			&capiazure.AzureCluster{},
+			&capiazure.AzureMachine{},
+			&capiazure.AzureMachineTemplate{},
+		}
+	case hyperv1.OpenStackPlatform:
+		return []client.Object{
+			&capiopenstackv1alpha1.OpenStackServer{},
+			&capiopenstackv1beta1.OpenStackCluster{},
+			&capiopenstackv1beta1.OpenStackMachine{},
+			&capiopenstackv1beta1.OpenStackMachineTemplate{},
+			&orcv1alpha1.Image{},
+		}
+	case hyperv1.AgentPlatform:
+		return []client.Object{
+			&agentv1.AgentMachine{},
+			&agentv1.AgentMachineTemplate{},
+			&agentv1.AgentCluster{},
+		}
+	case hyperv1.KubevirtPlatform:
+		return []client.Object{
+			&capikubevirt.KubevirtMachine{},
+			&capikubevirt.KubevirtMachineTemplate{},
+			&capikubevirt.KubevirtCluster{},
+		}
+	case hyperv1.NonePlatform, hyperv1.IBMCloudPlatform, hyperv1.PowerVSPlatform, hyperv1.GCPPlatform:
+		// These platforms have no platform-specific CAPI resources to inspect.
+		return nil
+	default:
+		// For unknown or empty platform types (including when the HostedCluster
+		// could not be fetched), return all platform-specific resources. This
+		// preserves the previous behavior as a fallback.
+		return []client.Object{
+			&capiaws.AWSMachine{},
+			&capiaws.AWSMachineTemplate{},
+			&capiaws.AWSCluster{},
+			&hyperv1.AWSEndpointService{},
+			&capiazure.AzureCluster{},
+			&capiazure.AzureMachine{},
+			&capiazure.AzureMachineTemplate{},
+			&capiopenstackv1alpha1.OpenStackServer{},
+			&capiopenstackv1beta1.OpenStackCluster{},
+			&capiopenstackv1beta1.OpenStackMachine{},
+			&capiopenstackv1beta1.OpenStackMachineTemplate{},
+			&orcv1alpha1.Image{},
+			&agentv1.AgentMachine{},
+			&agentv1.AgentMachineTemplate{},
+			&agentv1.AgentCluster{},
+			&capikubevirt.KubevirtMachine{},
+			&capikubevirt.KubevirtMachineTemplate{},
+			&capikubevirt.KubevirtCluster{},
+		}
+	}
 }
