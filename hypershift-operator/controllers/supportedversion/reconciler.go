@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	manifests "github.com/openshift/hypershift/hypershift-operator/controllers/manifests/supportedversion"
 	"github.com/openshift/hypershift/support/config"
+	manifests "github.com/openshift/hypershift/support/manifests/supportedversion"
 	"github.com/openshift/hypershift/support/supportedversion"
 	"github.com/openshift/hypershift/support/upsert"
 

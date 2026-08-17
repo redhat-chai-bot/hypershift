@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
-	manifests "github.com/openshift/hypershift/hypershift-operator/controllers/manifests/supportedversion"
 	"github.com/openshift/hypershift/support/config"
+	manifests "github.com/openshift/hypershift/support/manifests/supportedversion"
 
 	corev1 "k8s.io/api/core/v1"
 
