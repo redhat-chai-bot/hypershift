@@ -36,6 +36,7 @@ import (
 	fakecapabilities "github.com/openshift/hypershift/support/capabilities/fake"
 	"github.com/openshift/hypershift/support/certs"
 	controlplanecomponent "github.com/openshift/hypershift/support/controlplane-component"
+	"github.com/openshift/hypershift/support/events"
 	"github.com/openshift/hypershift/support/k8sutil"
 	"github.com/openshift/hypershift/support/netutil"
 	"github.com/openshift/hypershift/support/releaseinfo"
@@ -3573,6 +3574,67 @@ func TestReconcileDegradedStatus(t *testing.T) {
 			},
 		},
 		{
+			name: "When a deployment has unavailable replicas with pod warning events, the message should include event details",
+			hcp: &hyperv1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "test-hcp",
+					Namespace:  testNamespace,
+					Generation: 7,
+				},
+			},
+			existingObjects: []client.Object{
+				&appsv1.Deployment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "router",
+						Namespace: testNamespace,
+						Labels: map[string]string{
+							controlplanecomponent.ManagedByLabel: "control-plane-operator",
+						},
+					},
+					Spec: appsv1.DeploymentSpec{
+						Selector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"app": "router"},
+						},
+					},
+					Status: appsv1.DeploymentStatus{
+						UnavailableReplicas: 1,
+					},
+				},
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "router-abc123",
+						Namespace: testNamespace,
+						Labels:    map[string]string{"app": "router"},
+						UID:       "pod-uid-1",
+					},
+					Status: corev1.PodStatus{
+						Conditions: []corev1.PodCondition{
+							{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+						},
+					},
+				},
+				&corev1.Event{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "router-abc123.event1",
+						Namespace: testNamespace,
+					},
+					InvolvedObject: corev1.ObjectReference{
+						UID: "pod-uid-1",
+					},
+					Type:    corev1.EventTypeWarning,
+					Reason:  "FailedCreatePodSandBox",
+					Message: "failed to issue dhcp discover packet to create mapping in host: timed out waiting for replies",
+				},
+			},
+			expectedCondition: metav1.Condition{
+				Type:               string(hyperv1.HostedControlPlaneDegraded),
+				Status:             metav1.ConditionTrue,
+				Reason:             "UnavailableReplicas",
+				Message:            "router deployment has 1 unavailable replicas (FailedCreatePodSandBox: failed to issue dhcp discover packet",
+				ObservedGeneration: 7,
+			},
+		},
+		{
 			name: "When List returns unexpected error, it should return error",
 			hcp: &hyperv1.HostedControlPlane{
 				ObjectMeta: metav1.ObjectMeta{
@@ -3602,6 +3664,9 @@ func TestReconcileDegradedStatus(t *testing.T) {
 			} else {
 				c = fake.NewClientBuilder().
 					WithScheme(api.Scheme).
+					WithIndex(&corev1.Event{}, events.EventInvolvedObjectUIDField, func(obj client.Object) []string {
+						return []string{string(obj.(*corev1.Event).InvolvedObject.UID)}
+					}).
 					WithObjects(tc.existingObjects...).
 					Build()
 			}

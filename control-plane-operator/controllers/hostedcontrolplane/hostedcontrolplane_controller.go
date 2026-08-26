@@ -114,6 +114,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -572,7 +573,11 @@ func (r *HostedControlPlaneReconciler) reconcileDegradedStatus(ctx context.Conte
 	})
 	for _, deployment := range cpoManagedDeploymentList.Items {
 		if deployment.Status.UnavailableReplicas > 0 {
-			errs = append(errs, fmt.Errorf("%s deployment has %d unavailable replicas", deployment.Name, deployment.Status.UnavailableReplicas))
+			msg := fmt.Sprintf("%s deployment has %d unavailable replicas", deployment.Name, deployment.Status.UnavailableReplicas)
+			if detail := podEventDetail(ctx, r.Client, &deployment); detail != "" {
+				msg = fmt.Sprintf("%s (%s)", msg, detail)
+			}
+			errs = append(errs, errors.New(msg))
 		}
 	}
 	err := utilerrors.NewAggregate(errs)
@@ -583,6 +588,86 @@ func (r *HostedControlPlaneReconciler) reconcileDegradedStatus(ctx context.Conte
 	}
 	meta.SetStatusCondition(&hostedControlPlane.Status.Conditions, condition)
 	return nil
+}
+
+// podEventDetail returns the most recent warning event reason and message for
+// pods belonging to the given deployment that are not ready. This surfaces the
+// root cause when a deployment has unavailable replicas, e.g.
+// "FailedCreatePodSandBox: failed to issue dhcp discover packet ...".
+// It returns an empty string if no relevant events are found.
+func podEventDetail(ctx context.Context, c client.Client, deployment *appsv1.Deployment) string {
+	if deployment.Spec.Selector == nil {
+		return ""
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
+	if err != nil {
+		return ""
+	}
+
+	podList := &corev1.PodList{}
+	if err := c.List(ctx, podList,
+		client.InNamespace(deployment.Namespace),
+		client.MatchingLabelsSelector{Selector: selector},
+	); err != nil {
+		return ""
+	}
+
+	var mostRecent *corev1.Event
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if isPodReady(pod) {
+			continue
+		}
+
+		eventList := &corev1.EventList{}
+		if err := c.List(ctx, eventList, &client.ListOptions{
+			Namespace:     pod.Namespace,
+			FieldSelector: fields.OneTermEqualSelector(events.EventInvolvedObjectUIDField, string(pod.UID)),
+		}); err != nil {
+			continue
+		}
+
+		for j := range eventList.Items {
+			event := &eventList.Items[j]
+			if event.Type != corev1.EventTypeWarning {
+				continue
+			}
+			if mostRecent == nil || eventTime(event).After(eventTime(mostRecent)) {
+				mostRecent = event
+			}
+		}
+	}
+
+	if mostRecent != nil {
+		detail := fmt.Sprintf("%s: %s", mostRecent.Reason, mostRecent.Message)
+		// Truncate to avoid bloating the condition message.
+		const maxLen = 256
+		if len(detail) > maxLen {
+			detail = detail[:maxLen-3] + "..."
+		}
+		return detail
+	}
+	return ""
+}
+
+// eventTime returns the best available timestamp for an event, preferring
+// LastTimestamp (set on legacy/aggregated events) over CreationTimestamp.
+func eventTime(e *corev1.Event) time.Time {
+	if !e.LastTimestamp.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	return e.CreationTimestamp.Time
+}
+
+// isPodReady returns true if the pod has a Ready condition set to True.
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (r *HostedControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
