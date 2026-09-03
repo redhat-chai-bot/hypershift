@@ -4390,3 +4390,53 @@ func TestReconcileConfigOperatorReconciliationCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcilePeriodicResync(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		wantRequeueMin time.Duration
+		wantRequeueMax time.Duration
+	}{
+		{
+			name:           "When reconciliation succeeds, it should return RequeueAfter for periodic resync",
+			wantRequeueMin: 60 * time.Second,
+			wantRequeueMax: 60 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := NewGomegaWithT(t)
+			imageMetaDataProvider := fakeimagemetadataprovider.FakeRegistryClientImageMetadataProviderHCCO{}
+			ctx := logr.NewContext(context.Background(), zapr.NewLogger(zaptest.NewLogger(t)))
+
+			fakeClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(initialObjects...).WithStatusSubresource(&configv1.Infrastructure{}).Build()
+			cpClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(cpObjects...).WithStatusSubresource(&hyperv1.HostedControlPlane{}).Build()
+
+			r := &reconciler{
+				client:                 fakeClient,
+				uncachedClient:         fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects().Build(),
+				CreateOrUpdateProvider: &simpleCreateOrUpdater{},
+				platformType:           hyperv1.NonePlatform,
+				clusterSignerCA:        "foobar",
+				cpClient:               cpClient,
+				hcpName:                "foo",
+				hcpNamespace:           "bar",
+				releaseProvider: &fakereleaseprovider.FakeReleaseProvider{
+					Components: map[string]string{
+						"cli": "quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:cli-fake",
+					},
+				},
+				ImageMetaDataProvider: &imageMetaDataProvider,
+			}
+			result, _ := r.Reconcile(ctx, controllerruntime.Request{})
+			g.Expect(result.RequeueAfter).To(BeNumerically(">=", tc.wantRequeueMin),
+				"RequeueAfter should be at least %v for periodic resync", tc.wantRequeueMin)
+			g.Expect(result.RequeueAfter).To(BeNumerically("<=", tc.wantRequeueMax),
+				"RequeueAfter should be at most %v for periodic resync", tc.wantRequeueMax)
+		})
+	}
+}

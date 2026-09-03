@@ -461,7 +461,11 @@ func (r *reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (result ctrl
 		return result, utilerrors.NewAggregate(append(errs, err))
 	}
 
-	return ctrl.Result{}, utilerrors.NewAggregate(errs)
+	// Periodic resync ensures convergence even when watch events are missed.
+	// Without this, the controller relies solely on event-driven reconciliation
+	// and controller-runtime's exponential backoff (up to ~16m), which can leave
+	// resources un-reconciled for extended periods after transient failures.
+	return ctrl.Result{RequeueAfter: 60 * time.Second}, utilerrors.NewAggregate(errs)
 }
 
 func (r *reconciler) reconcileStorageAndMisc(ctx context.Context, log logr.Logger, hcp *hyperv1.HostedControlPlane, releaseImage *releaseinfo.ReleaseImage) []error {
