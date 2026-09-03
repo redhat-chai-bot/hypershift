@@ -111,8 +111,8 @@ const (
 	// resyncInterval is the periodic reconciliation interval for the resources controller.
 	// This ensures convergence even when watch events are missed, without relying solely
 	// on controller-runtime's exponential backoff (up to ~16m).
-	resyncInterval = 60 * time.Second
-	awsCredentialsTemplate    = `[default]
+	resyncInterval         = 60 * time.Second
+	awsCredentialsTemplate = `[default]
 role_arn = %s
 web_identity_token_file = /var/run/secrets/openshift/serviceaccount/token
 sts_regional_endpoints = regional
