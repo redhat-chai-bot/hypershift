@@ -107,6 +107,11 @@ const (
 	ConfigManagedNamespace    = "openshift-config-managed"
 	CloudProviderCMName       = "cloud-provider-config"
 	maxConditionMessageLength = 1024
+
+	// resyncInterval is the periodic reconciliation interval for the resources controller.
+	// This ensures convergence even when watch events are missed, without relying solely
+	// on controller-runtime's exponential backoff (up to ~16m).
+	resyncInterval = 60 * time.Second
 	awsCredentialsTemplate    = `[default]
 role_arn = %s
 web_identity_token_file = /var/run/secrets/openshift/serviceaccount/token
@@ -457,6 +462,8 @@ func (r *reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (result ctrl
 
 	errs = append(errs, r.reconcilePlatformSpecificResources(ctx, log, hcp, releaseImage)...)
 
+	// Recovery requeue (120s) takes precedence over the normal resync interval (60s)
+	// because ongoing recovery needs a dedicated polling cadence.
 	if result, err := r.reconcileClusterRecovery(ctx, log, hcp, errs); err != nil || result.RequeueAfter > 0 {
 		return result, utilerrors.NewAggregate(append(errs, err))
 	}
@@ -465,7 +472,7 @@ func (r *reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (result ctrl
 	// Without this, the controller relies solely on event-driven reconciliation
 	// and controller-runtime's exponential backoff (up to ~16m), which can leave
 	// resources un-reconciled for extended periods after transient failures.
-	return ctrl.Result{RequeueAfter: 60 * time.Second}, utilerrors.NewAggregate(errs)
+	return ctrl.Result{RequeueAfter: resyncInterval}, utilerrors.NewAggregate(errs)
 }
 
 func (r *reconciler) reconcileStorageAndMisc(ctx context.Context, log logr.Logger, hcp *hyperv1.HostedControlPlane, releaseImage *releaseinfo.ReleaseImage) []error {
