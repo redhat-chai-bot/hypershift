@@ -385,7 +385,6 @@ func OperatorUpgradeNoRolloutTest(getTestCtx internal.TestContextGetter) {
 	})
 }
 
-
 func nodeNames(nodeList *corev1.NodeList) []string {
 	names := make([]string, len(nodeList.Items))
 	for i := range nodeList.Items {
