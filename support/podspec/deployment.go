@@ -48,6 +48,11 @@ func IsStatefulSetReady(_ context.Context, statefulSet *appsv1.StatefulSet) bool
 // to prevent indefinite rollout stalls from orphaned finalizers or hung preStop hooks.
 // A zero gracePeriod means all terminating pods are counted regardless of age.
 // Returns false with a nil error when the selector is nil.
+//
+// Note on clock skew: DeletionTimestamp is set by the API server, and time.Since
+// compares it against the local clock. Minor clock skew between the API server
+// and this process is tolerable because the grace period (typically 5 minutes)
+// is orders of magnitude larger than any realistic NTP drift.
 func HasTerminatingPods(ctx context.Context, c client.Reader, namespace string, selector *metav1.LabelSelector, gracePeriod time.Duration) (bool, error) {
 	if selector == nil {
 		return false, nil

@@ -2,6 +2,7 @@ package podspec
 
 import (
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -323,6 +324,134 @@ func TestHasTerminatingPods(t *testing.T) {
 			}
 			if result != tt.expectedResult {
 				t.Errorf("HasTerminatingPods() %s got %t, expected %t", tt.name, result, tt.expectedResult)
+			}
+		})
+	}
+}
+
+func TestHasTerminatingPodsGracePeriod(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	selector := &v1.LabelSelector{
+		MatchLabels: map[string]string{"app": "test"},
+	}
+
+	gracePeriod := 5 * time.Minute
+	now := time.Now()
+
+	tests := []struct {
+		name           string
+		pods           []corev1.Pod
+		gracePeriod    time.Duration
+		expectedResult bool
+	}{
+		{
+			name: "When pod terminated recently within grace period, it should return true",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "recent-terminating",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-1 * time.Minute)},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+			},
+			gracePeriod:    gracePeriod,
+			expectedResult: true,
+		},
+		{
+			name: "When pod has been terminating beyond grace period, it should return false",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "stuck-terminating",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-10 * time.Minute)},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+			},
+			gracePeriod:    gracePeriod,
+			expectedResult: false,
+		},
+		{
+			name: "When zero grace period is used, it should count all terminating pods regardless of age",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "old-terminating",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-1 * time.Hour)},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+			},
+			gracePeriod:    0,
+			expectedResult: true,
+		},
+		{
+			name: "When pod terminated exactly at grace period boundary, it should return false",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "boundary-terminating",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-(gracePeriod + time.Second))},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+			},
+			gracePeriod:    gracePeriod,
+			expectedResult: false,
+		},
+		{
+			name: "When mix of recent and stuck terminating pods exist, it should return true for the recent one",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "stuck-pod",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-10 * time.Minute)},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+				{
+					ObjectMeta: v1.ObjectMeta{
+						Name:              "recent-pod",
+						Namespace:         "ns",
+						Labels:            map[string]string{"app": "test"},
+						DeletionTimestamp: &v1.Time{Time: now.Add(-30 * time.Second)},
+						Finalizers:        []string{"keep-alive"},
+					},
+				},
+			},
+			gracePeriod:    gracePeriod,
+			expectedResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			for i := range tt.pods {
+				builder = builder.WithObjects(&tt.pods[i])
+			}
+			c := builder.Build()
+
+			result, err := HasTerminatingPods(t.Context(), c, "ns", selector, tt.gracePeriod)
+			if err != nil {
+				t.Errorf("HasTerminatingPods() unexpected error: %v", err)
+				return
+			}
+			if result != tt.expectedResult {
+				t.Errorf("HasTerminatingPods() got %t, expected %t", result, tt.expectedResult)
 			}
 		})
 	}
