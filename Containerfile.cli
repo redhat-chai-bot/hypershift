@@ -22,7 +22,9 @@ COPY product-cli/ product-cli/
 # copy list maintainable. The Go compiler excludes unreferenced packages
 # from the binary, so they only affect build-context size.
 COPY cmd/cluster/ cmd/cluster/
+COPY cmd/infra/aws/ cmd/infra/aws/
 COPY cmd/infra/azure/ cmd/infra/azure/
+COPY cmd/install/assets/ cmd/install/assets/
 COPY cmd/kubeconfig/ cmd/kubeconfig/
 COPY cmd/log/ cmd/log/
 COPY cmd/nodepool/ cmd/nodepool/
