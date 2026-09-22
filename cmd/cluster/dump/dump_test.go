@@ -1,4 +1,4 @@
-package core
+package dump
 
 import (
 	"context"
@@ -39,6 +39,8 @@ func TestDumpClusterWithRetry(t *testing.T) {
 }
 
 func TestIsResourceRegistered(t *testing.T) {
+	t.Parallel()
+
 	dummyGroup := "dummy.group.io"
 	dummyVersion := "v2beta3"
 	dummyKind := "machinedeployment"
@@ -86,6 +88,8 @@ func TestIsResourceRegistered(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
 			result, err := isResourceRegistered(fakeDiscoveryClient, test.gvk)
 			if result != test.expected {
 				t.Errorf("expected %v, got %v", test.expected, result)
@@ -98,7 +102,11 @@ func TestIsResourceRegistered(t *testing.T) {
 }
 
 func TestNewDumpCommand(t *testing.T) {
+	t.Parallel()
+
 	t.Run("When using the --dump-guest-cluster flag", func(t *testing.T) {
+		t.Parallel()
+
 		tests := []struct {
 			name               string
 			args               []string
@@ -166,6 +174,8 @@ func TestNewDumpCommand(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
 				var capturedOpts *DumpOptions
 				cmd := NewDumpCommand(func(ctx context.Context, opts *DumpOptions) error {
 					capturedOpts = opts

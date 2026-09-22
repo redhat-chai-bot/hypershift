@@ -1,4 +1,4 @@
-package core
+package dump
 
 import (
 	"bytes"
@@ -147,6 +147,14 @@ type DumpOptions struct {
 	ImpersonateAs string
 
 	Log logr.Logger
+}
+
+func lookupOC() (string, error) {
+	ocCommand, err := exec.LookPath("oc")
+	if err != nil || len(ocCommand) == 0 {
+		return "", fmt.Errorf("cannot find oc command")
+	}
+	return ocCommand, nil
 }
 
 type DumpCallback func(ctx context.Context, opts *DumpOptions) error
@@ -393,9 +401,9 @@ func DumpCluster(ctx context.Context, opts *DumpOptions) error {
 	var c client.Client
 	var err error
 
-	ocCommand, err := exec.LookPath("oc")
-	if err != nil || len(ocCommand) == 0 {
-		return fmt.Errorf("cannot find oc command")
+	ocCommand, err := lookupOC()
+	if err != nil {
+		return err
 	}
 	cfg, err := util.GetConfig()
 	if err != nil {
@@ -581,9 +589,9 @@ func DumpCluster(ctx context.Context, opts *DumpOptions) error {
 // able to be scheduled and so can only gather information directly accessible
 // through the api server.
 func DumpGuestCluster(ctx context.Context, log logr.Logger, kubeconfig string, destDir string) error {
-	ocCommand, err := exec.LookPath("oc")
-	if err != nil || len(ocCommand) == 0 {
-		return fmt.Errorf("cannot find oc command")
+	ocCommand, err := lookupOC()
+	if err != nil {
+		return err
 	}
 	cmd := OCAdmInspect{
 		oc:          ocCommand,
@@ -895,9 +903,9 @@ func dumpKubevirtExternalCluster(ctx context.Context, mngmtCl client.Client, cre
 		_ = os.Remove(kubeconfigFile)
 	}()
 
-	ocCommand, err := exec.LookPath("oc")
-	if err != nil || len(ocCommand) == 0 {
-		return fmt.Errorf("cannot find oc command")
+	ocCommand, err := lookupOC()
+	if err != nil {
+		return err
 	}
 	cmd := OCAdmInspect{
 		oc:          ocCommand,
