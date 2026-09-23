@@ -294,13 +294,50 @@ func (t *Token) Reconcile(ctx context.Context) error {
 // for a generated payload. It intentionally does not create a legacy token
 // Secret: normal Karpenter provisioning uses the CRD/store contract.
 func (t *Token) ReconcileIgnitionPayloadUserData(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload) (*corev1.Secret, error) {
-	if payload == nil || payload.Status.Current == nil {
+	if payload == nil || payload.Status.CurrentRef() == nil {
 		return nil, fmt.Errorf("ignition payload is not generated")
 	}
 	t.ignitionPayload = payload
 	secret := t.UserDataSecret()
 	if _, err := t.CreateOrUpdate(ctx, t.Client, secret, func() error {
-		return t.reconcileUserDataSecret(ctrl.LoggerFrom(ctx), secret, payload.Status.Current.Token)
+		return t.reconcileUserDataSecret(ctrl.LoggerFrom(ctx), secret, payload.Status.CurrentRef().Token)
+	}); err != nil {
+		return nil, err
+	}
+	return secret, nil
+}
+
+// ReconcileLegacyInPlacePayloadSecret writes the exact token Secret shape
+// consumed by HCCO's in-place upgrader.  It intentionally uses the historical
+// ConfigGenerator bytes, rather than the rendered ignition payload: HCCO
+// decodes this value as compressed-and-base64 MachineConfig input.
+//
+// The new CRD-backed userdata and this Secret are both served during an
+// in-place migration. The caller deletes only the prior generation after the
+// MachineSet has acknowledged its drain.
+func (t *Token) ReconcileLegacyInPlacePayloadSecret(ctx context.Context, configVersion string) (*corev1.Secret, error) {
+	if configVersion == "" {
+		return nil, fmt.Errorf("legacy in-place config version is required")
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: t.controlplaneNamespace,
+		Name:      fmt.Sprintf("%s-%s-%s", TokenSecretPrefix, t.ConfigGenerator.nodePool.GetName(), configVersion),
+	}}
+	if _, err := t.CreateOrUpdate(ctx, t.Client, secret, func() error {
+		payload, err := t.CompressedAndEncoded()
+		if err != nil {
+			return fmt.Errorf("compress legacy in-place payload: %w", err)
+		}
+		secret.Immutable = ptr.To(false)
+		secret.Annotations = map[string]string{
+			nodePoolAnnotation: client.ObjectKeyFromObject(t.nodePool).String(),
+		}
+		secret.Data = map[string][]byte{
+			"payload":                    payload.Bytes(),
+			TokenSecretReleaseKey:        []byte(t.nodePool.Spec.Release.Image),
+			TokenSecretReleaseVersionKey: []byte(t.releaseImage.Version()),
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -309,9 +346,15 @@ func (t *Token) ReconcileIgnitionPayloadUserData(ctx context.Context, payload *i
 
 const UserDataSecrePrefix = "user-data"
 
+// NodePoolName returns the consumer NodePool name used in generated Secret
+// names. Karpenter uses it to retire only the exact previous generation.
+func (t *Token) NodePoolName() string {
+	return t.ConfigGenerator.nodePool.GetName()
+}
+
 func (t *Token) UserDataSecret() *corev1.Secret {
-	if t.ignitionPayload != nil && t.ignitionPayload.Status.Current != nil {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: t.controlplaneNamespace, Name: fmt.Sprintf("%s-%s-%d", UserDataSecrePrefix, t.ConfigGenerator.nodePool.GetName(), t.ignitionPayload.Status.Current.Generation)}}
+	if t.ignitionPayload != nil && t.ignitionPayload.Status.CurrentRef() != nil {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: t.controlplaneNamespace, Name: fmt.Sprintf("%s-%s-%d", UserDataSecrePrefix, t.ConfigGenerator.nodePool.GetName(), t.ignitionPayload.Status.CurrentRef().Generation)}}
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -454,9 +497,13 @@ func (t *Token) reconcileUserDataSecret(log logr.Logger, userDataSecret *corev1.
 	encodedCACert := base64.StdEncoding.EncodeToString(t.userData.caCert)
 	encodedToken := base64.StdEncoding.EncodeToString([]byte(token))
 	targetConfigVersion := t.Hash()
-	if t.ignitionPayload != nil && t.ignitionPayload.Status.Current != nil {
-		targetConfigVersion = t.ignitionPayload.Status.Current.ConfigHash
+	if t.ignitionPayload != nil && t.ignitionPayload.Status.CurrentRef() != nil {
+		targetConfigVersion = t.ignitionPayload.Status.CurrentRef().ConfigHash
 	}
+	// Consumers that list user-data Secrets (notably the Karpenter NodeClass
+	// bridge) must select the exact current generation instead of relying on
+	// informer/list order while the previous generation drains.
+	userDataSecret.Annotations[nodePoolAnnotationCurrentConfigVersion] = targetConfigVersion
 	payloadRef := ""
 	if t.ignitionPayload != nil {
 		payloadRef = t.ignitionPayload.Namespace + "/" + t.ignitionPayload.Name

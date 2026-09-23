@@ -24,15 +24,28 @@ import (
 // IgnitionPayloadStatusApplyConfiguration represents a declarative configuration of the IgnitionPayloadStatus type for use
 // with apply.
 type IgnitionPayloadStatusApplyConfiguration struct {
+	Conditions []v1.ConditionApplyConfiguration    `json:"conditions,omitempty"`
 	Current    *PayloadReferenceApplyConfiguration `json:"current,omitempty"`
 	Previous   *PayloadReferenceApplyConfiguration `json:"previous,omitempty"`
-	Conditions []v1.ConditionApplyConfiguration    `json:"conditions,omitempty"`
 }
 
 // IgnitionPayloadStatusApplyConfiguration constructs a declarative configuration of the IgnitionPayloadStatus type for use with
 // apply.
 func IgnitionPayloadStatus() *IgnitionPayloadStatusApplyConfiguration {
 	return &IgnitionPayloadStatusApplyConfiguration{}
+}
+
+// WithConditions adds the given value to the Conditions field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Conditions field.
+func (b *IgnitionPayloadStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *IgnitionPayloadStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithConditions")
+		}
+		b.Conditions = append(b.Conditions, *values[i])
+	}
+	return b
 }
 
 // WithCurrent sets the Current field in the declarative configuration to the given value
@@ -48,18 +61,5 @@ func (b *IgnitionPayloadStatusApplyConfiguration) WithCurrent(value *PayloadRefe
 // If called multiple times, the Previous field is set to the value of the last call.
 func (b *IgnitionPayloadStatusApplyConfiguration) WithPrevious(value *PayloadReferenceApplyConfiguration) *IgnitionPayloadStatusApplyConfiguration {
 	b.Previous = value
-	return b
-}
-
-// WithConditions adds the given value to the Conditions field in the declarative configuration
-// and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the Conditions field.
-func (b *IgnitionPayloadStatusApplyConfiguration) WithConditions(values ...*v1.ConditionApplyConfiguration) *IgnitionPayloadStatusApplyConfiguration {
-	for i := range values {
-		if values[i] == nil {
-			panic("nil value passed to WithConditions")
-		}
-		b.Conditions = append(b.Conditions, *values[i])
-	}
 	return b
 }

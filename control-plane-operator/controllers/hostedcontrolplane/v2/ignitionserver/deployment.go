@@ -11,6 +11,7 @@ import (
 	component "github.com/openshift/hypershift/support/controlplane-component"
 	"github.com/openshift/hypershift/support/podspec"
 	"github.com/openshift/hypershift/support/proxy"
+	"github.com/openshift/hypershift/support/releaseinfo"
 	"github.com/openshift/hypershift/support/util"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -83,4 +84,13 @@ func (ign *ignitionServer) adaptDeployment(cpContext component.WorkloadContext, 
 	}
 
 	return nil
+}
+
+// AdaptDeployment applies the same serving configuration used by the CPO
+// component to an ignition-server Deployment owned by another reconciler.  The
+// payload-controller migration deliberately uses this rather than maintaining a
+// second copy of TLS, proxy, registry override, platform, and trust-bundle
+// handling.
+func AdaptDeployment(hcp *hyperv1.HostedControlPlane, releaseProvider releaseinfo.ProviderWithOpenShiftImageRegistryOverrides, deployment *appsv1.Deployment) error {
+	return (&ignitionServer{releaseProvider: releaseProvider}).adaptDeployment(component.WorkloadContext{HCP: hcp}, deployment)
 }

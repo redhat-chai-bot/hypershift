@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	hyperkarpenterv1 "github.com/openshift/hypershift/api/karpenter/v1"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/common"
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/yaml"
 
+	awskarpenterv1 "github.com/aws/karpenter-provider-aws/pkg/apis/v1"
 	"github.com/blang/semver"
 )
 
@@ -78,10 +80,21 @@ func (r *KarpenterIgnitionReconciler) SetupWithManager(mgr ctrl.Manager, managem
 		Named("karpenter-ignition-controller").
 		// Watch OpenshiftEC2NodeClass in the guest cluster (main manager)
 		For(&hyperkarpenterv1.OpenshiftEC2NodeClass{}).
+		// The NodeClass controller writes this object only after it has selected
+		// and embedded the current userdata. Its update is the drain
+		// acknowledgement used to retire the previous payload generation.
+		Watches(&awskarpenterv1.EC2NodeClass{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(obj)}}
+		})).
 		// Watch HostedControlPlane in the management cluster
 		WatchesRawSource(source.Kind[client.Object](managementCluster.GetCache(), &hyperv1.HostedControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(r.mapToOpenshiftEC2NodeClasses),
 			r.hcpPredicate())).
+		// The payload controller publishes status asynchronously. Watching its
+		// management-cluster objects is what advances a waiting NodeClass from
+		// request creation to userdata and the current-generation annotation.
+		WatchesRawSource(source.Kind[client.Object](managementCluster.GetCache(), &ignitionv1alpha1.IgnitionPayload{},
+			handler.EnqueueRequestsFromMapFunc(r.mapToOpenshiftEC2NodeClasses))).
 		WithOptions(controller.Options{
 			RateLimiter:             workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 10*time.Second),
 			MaxConcurrentReconciles: 10,
@@ -316,7 +329,7 @@ func (r *KarpenterIgnitionReconciler) reconcileNodeClassToken(
 	if err != nil {
 		return fmt.Errorf("reconcile ignition payload: %w", err)
 	}
-	if payload.Status.Current == nil {
+	if payload.Status.CurrentRef() == nil {
 		// The initial N->N+1 handoff must keep existing NodeClasses provisionable
 		// until the per-HCP renderer publishes the first generation. This frozen
 		// compatibility write is never used again once status.current exists.
@@ -333,13 +346,62 @@ func (r *KarpenterIgnitionReconciler) reconcileNodeClassToken(
 	}
 	// Karpenter treats each request as one-shot. A generation changes the
 	// userdata Secret name; the NodeClass controller selects the latest one.
-	if currentConfigVersion != payload.Status.Current.ConfigHash || currentRolloutConfig != payload.Status.Current.RolloutHash {
-		if err := r.updateConfigAnnotations(ctx, openshiftEC2NodeClass, payload.Status.Current.ConfigHash, payload.Status.Current.RolloutHash); err != nil {
+	current := payload.Status.CurrentRef()
+	if currentConfigVersion != current.ConfigHash || currentRolloutConfig != current.RolloutHash {
+		if err := r.updateConfigAnnotations(ctx, openshiftEC2NodeClass, current.ConfigHash, current.RolloutHash); err != nil {
 			return err
 		}
-		log.Info("Updated payload generation", "generation", payload.Status.Current.Generation)
+		log.Info("Updated payload generation", "generation", current.Generation)
+	}
+	if err := r.retireDrainedPayloadGeneration(ctx, payload, openshiftEC2NodeClass, token); err != nil {
+		return fmt.Errorf("retire drained ignition payload generation: %w", err)
 	}
 
+	return nil
+}
+
+// retireDrainedPayloadGeneration acknowledges a Karpenter handoff only after
+// the guest EC2NodeClass embeds the current userdata. Updating the source
+// OpenshiftEC2NodeClass annotation alone is not sufficient: the NodeClass
+// reconciler may still be waiting for its selected Secret, or may be holding
+// the old userdata during a control-plane upgrade. This keeps the previous
+// payload and its Secret alive until the consumer has demonstrably switched.
+func (r *KarpenterIgnitionReconciler) retireDrainedPayloadGeneration(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, openshiftEC2NodeClass *hyperkarpenterv1.OpenshiftEC2NodeClass, token *nodepool.Token) error {
+	previous := payload.Status.PreviousRef()
+	current := payload.Status.CurrentRef()
+	if previous == nil || current == nil || ptr.Deref(payload.Spec.RetiredGeneration, -1) >= ptr.Deref(previous.Generation, -1) {
+		return nil
+	}
+	currentUserData := token.UserDataSecret()
+	if err := r.ManagementClient.Get(ctx, client.ObjectKeyFromObject(currentUserData), currentUserData); err != nil {
+		return fmt.Errorf("get current Karpenter userdata Secret: %w", err)
+	}
+	writtenUserData := string(currentUserData.Data["value"])
+	if writtenUserData == "" {
+		return fmt.Errorf("current Karpenter userdata Secret %q has no value", currentUserData.Name)
+	}
+	guestNodeClass := &awskarpenterv1.EC2NodeClass{ObjectMeta: metav1.ObjectMeta{Name: openshiftEC2NodeClass.Name, Namespace: openshiftEC2NodeClass.Namespace}}
+	if err := r.GuestClient.Get(ctx, client.ObjectKeyFromObject(guestNodeClass), guestNodeClass); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get guest EC2NodeClass: %w", err)
+	}
+	if guestNodeClass.Spec.UserData == nil || *guestNodeClass.Spec.UserData != writtenUserData {
+		return nil
+	}
+	oldUserData := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: payload.Namespace,
+		Name:      fmt.Sprintf("%s-%s-%d", nodepool.UserDataSecrePrefix, token.NodePoolName(), ptr.Deref(previous.Generation, -1)),
+	}}
+	if err := client.IgnoreNotFound(r.ManagementClient.Delete(ctx, oldUserData)); err != nil {
+		return fmt.Errorf("delete drained Karpenter userdata Secret %q: %w", oldUserData.Name, err)
+	}
+	before := payload.DeepCopy()
+	payload.Spec.RetiredGeneration = previous.Generation
+	if err := r.ManagementClient.Patch(ctx, payload, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("acknowledge retired payload generation %d: %w", ptr.Deref(previous.Generation, -1), err)
+	}
 	return nil
 }
 

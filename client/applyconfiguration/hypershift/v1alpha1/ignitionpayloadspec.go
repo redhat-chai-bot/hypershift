@@ -29,8 +29,8 @@ type IgnitionPayloadSpecApplyConfiguration struct {
 	AdditionalTrustBundle *v1.LocalObjectReference                         `json:"additionalTrustBundle,omitempty"`
 	OSStream              *string                                          `json:"osStream,omitempty"`
 	RolloutGlobalConfig   *string                                          `json:"rolloutGlobalConfig,omitempty"`
-	MgmtConfigRefs        []v1.LocalObjectReference                        `json:"mgmtConfigRefs,omitempty"`
-	RolloutConfigRefs     []v1.LocalObjectReference                        `json:"rolloutConfigRefs,omitempty"`
+	MgmtConfig            []v1.LocalObjectReference                        `json:"mgmtConfig,omitempty"`
+	RolloutConfig         []v1.LocalObjectReference                        `json:"rolloutConfig,omitempty"`
 	RetiredGeneration     *int64                                           `json:"retiredGeneration,omitempty"`
 	RendererInputs        *IgnitionPayloadRendererInputsApplyConfiguration `json:"rendererInputs,omitempty"`
 }
@@ -81,22 +81,22 @@ func (b *IgnitionPayloadSpecApplyConfiguration) WithRolloutGlobalConfig(value st
 	return b
 }
 
-// WithMgmtConfigRefs adds the given value to the MgmtConfigRefs field in the declarative configuration
+// WithMgmtConfig adds the given value to the MgmtConfig field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the MgmtConfigRefs field.
-func (b *IgnitionPayloadSpecApplyConfiguration) WithMgmtConfigRefs(values ...v1.LocalObjectReference) *IgnitionPayloadSpecApplyConfiguration {
+// If called multiple times, values provided by each call will be appended to the MgmtConfig field.
+func (b *IgnitionPayloadSpecApplyConfiguration) WithMgmtConfig(values ...v1.LocalObjectReference) *IgnitionPayloadSpecApplyConfiguration {
 	for i := range values {
-		b.MgmtConfigRefs = append(b.MgmtConfigRefs, values[i])
+		b.MgmtConfig = append(b.MgmtConfig, values[i])
 	}
 	return b
 }
 
-// WithRolloutConfigRefs adds the given value to the RolloutConfigRefs field in the declarative configuration
+// WithRolloutConfig adds the given value to the RolloutConfig field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the RolloutConfigRefs field.
-func (b *IgnitionPayloadSpecApplyConfiguration) WithRolloutConfigRefs(values ...v1.LocalObjectReference) *IgnitionPayloadSpecApplyConfiguration {
+// If called multiple times, values provided by each call will be appended to the RolloutConfig field.
+func (b *IgnitionPayloadSpecApplyConfiguration) WithRolloutConfig(values ...v1.LocalObjectReference) *IgnitionPayloadSpecApplyConfiguration {
 	for i := range values {
-		b.RolloutConfigRefs = append(b.RolloutConfigRefs, values[i])
+		b.RolloutConfig = append(b.RolloutConfig, values[i])
 	}
 	return b
 }

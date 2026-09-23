@@ -59,19 +59,19 @@ type CAPI struct {
 }
 
 func (c *CAPI) usesIgnitionPayload() bool {
-	return c.ignitionPayload != nil && c.ignitionPayload.Status.Current != nil
+	return c.ignitionPayload != nil && c.ignitionPayload.Status.CurrentRef() != nil
 }
 
 func (c *CAPI) desiredConfigVersion() string {
 	if c.usesIgnitionPayload() {
-		return c.ignitionPayload.Status.Current.ConfigHash
+		return c.ignitionPayload.Status.CurrentRef().ConfigHash
 	}
 	return c.Hash()
 }
 
 func (c *CAPI) desiredRolloutConfig() string {
 	if c.usesIgnitionPayload() {
-		return c.ignitionPayload.Status.Current.RolloutHash
+		return c.ignitionPayload.Status.CurrentRef().RolloutHash
 	}
 	return c.RolloutHashWithoutVersion()
 }

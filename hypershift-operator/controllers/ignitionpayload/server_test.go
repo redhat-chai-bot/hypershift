@@ -45,6 +45,14 @@ func TestServerServeHTTP(t *testing.T) {
 		}
 	})
 
+	t.Run("When probed for health, it should report ready without requiring credentials", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+		}
+	})
+
 	t.Run("When the authorization header is malformed, it should reject the request", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/ignition", nil)
 		response := httptest.NewRecorder()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	component "github.com/openshift/hypershift/support/controlplane-component"
 	"github.com/openshift/hypershift/support/podspec"
 	"github.com/openshift/hypershift/support/proxy"
@@ -27,6 +28,12 @@ func adaptDeployment(cpContext component.WorkloadContext, deployment *appsv1.Dep
 	}
 
 	return nil
+}
+
+// AdaptDeployment applies the CPO proxy Deployment configuration to a
+// replacement workload during the payload-controller migration.
+func AdaptDeployment(hcp *hyperv1.HostedControlPlane, deployment *appsv1.Deployment) error {
+	return adaptDeployment(component.WorkloadContext{HCP: hcp}, deployment)
 }
 
 func tlsVersionToHAProxy(version string) (string, error) {
@@ -138,4 +145,10 @@ backend ignition_servers
 	}
 	cm.Data["haproxy.conf"] = haproxyConf
 	return nil
+}
+
+// AdaptHAProxyConfig renders the same TLS profile and cipher configuration as
+// the CPO ignition proxy for a replacement workload.
+func AdaptHAProxyConfig(hcp *hyperv1.HostedControlPlane, cm *corev1.ConfigMap) error {
+	return adaptHAProxyConfig(component.WorkloadContext{HCP: hcp}, cm)
 }

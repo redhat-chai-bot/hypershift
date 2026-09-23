@@ -10,9 +10,9 @@ import (
 func TestIgnitionPayloadRendererInputsSerialization(t *testing.T) {
 	t.Run("When renderer inputs are serialized, it should preserve owned hashes and optional cloud references", func(t *testing.T) {
 		payload := IgnitionPayload{Spec: IgnitionPayloadSpec{RendererInputs: IgnitionPayloadRendererInputs{
-			MachineConfigServerConfigRef:  corev1.LocalObjectReference{Name: "machine-config-server"},
+			MachineConfigServerConfig:     corev1.LocalObjectReference{Name: "machine-config-server"},
 			MachineConfigServerConfigHash: "hosted-cluster-hash",
-			CloudConfigRef:                &corev1.LocalObjectReference{Name: "azure-cloud-config"},
+			CloudConfig:                   &corev1.LocalObjectReference{Name: "azure-cloud-config"},
 			CloudConfigHash:               "cloud-config-hash",
 			ManagementGlobalConfig:        "full-management-config",
 		}}}
@@ -25,7 +25,7 @@ func TestIgnitionPayloadRendererInputsSerialization(t *testing.T) {
 			t.Fatal(err)
 		}
 		inputs := roundTrip.Spec.RendererInputs
-		if inputs.MachineConfigServerConfigRef.Name != "machine-config-server" || inputs.MachineConfigServerConfigHash != "hosted-cluster-hash" || inputs.CloudConfigRef == nil || inputs.CloudConfigRef.Name != "azure-cloud-config" || inputs.CloudConfigHash != "cloud-config-hash" || inputs.ManagementGlobalConfig != "full-management-config" {
+		if inputs.MachineConfigServerConfig.Name != "machine-config-server" || inputs.MachineConfigServerConfigHash != "hosted-cluster-hash" || inputs.CloudConfig == nil || inputs.CloudConfig.Name != "azure-cloud-config" || inputs.CloudConfigHash != "cloud-config-hash" || inputs.ManagementGlobalConfig != "full-management-config" {
 			t.Fatalf("renderer input round trip lost data: %#v", inputs)
 		}
 	})

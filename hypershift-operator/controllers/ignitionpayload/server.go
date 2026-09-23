@@ -30,6 +30,10 @@ func (s *Server) Put(token string, payload []byte) { s.cache.Store(token, payloa
 func (s *Server) Delete(token string) { s.cache.Delete(token) }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/healthz" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.URL.Path != "/ignition" {
 		http.NotFound(w, r)
 		return
@@ -85,7 +89,7 @@ func (s *Server) markReached(ctx context.Context, namespacedName, token string) 
 	payload := &ignitionv1alpha1.IgnitionPayload{}
 	payload.Namespace, payload.Name = namespace, name
 	return statuspatching.PatchStatus(ctx, s.Client, payload, func() error {
-		if payload.Status.Current == nil || payload.Status.Current.Token != token {
+		if current := payload.Status.CurrentRef(); current == nil || current.Token != token {
 			return nil
 		}
 		return setReachedCondition(payload)

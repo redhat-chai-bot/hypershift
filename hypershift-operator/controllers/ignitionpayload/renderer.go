@@ -50,6 +50,7 @@ func (r *MCORenderer) Render(ctx context.Context, request *ignitionv1alpha1.Igni
 		ReleaseProvider:       r.ReleaseProvider,
 		CloudProvider:         cloudProvider(request),
 		Namespace:             request.Namespace,
+		PullSecretName:        request.Spec.PullSecretName,
 		WorkDir:               workDir,
 		FeatureGateManifest:   featureGateManifest,
 		ImageFileCache:        imageFileCache,
@@ -59,10 +60,10 @@ func (r *MCORenderer) Render(ctx context.Context, request *ignitionv1alpha1.Igni
 }
 
 func cloudProvider(request *ignitionv1alpha1.IgnitionPayload) hyperv1.PlatformType {
-	if request.Spec.RendererInputs.CloudConfigRef == nil {
+	if request.Spec.RendererInputs.CloudConfig == nil {
 		return ""
 	}
-	switch request.Spec.RendererInputs.CloudConfigRef.Name {
+	switch request.Spec.RendererInputs.CloudConfig.Name {
 	case "azure-cloud-config":
 		return hyperv1.AzurePlatform
 	case "openstack-cloud-config":

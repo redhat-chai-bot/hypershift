@@ -24,9 +24,9 @@ import (
 // IgnitionPayloadRendererInputsApplyConfiguration represents a declarative configuration of the IgnitionPayloadRendererInputs type for use
 // with apply.
 type IgnitionPayloadRendererInputsApplyConfiguration struct {
-	MachineConfigServerConfigRef  *v1.LocalObjectReference `json:"machineConfigServerConfigRef,omitempty"`
+	MachineConfigServerConfig     *v1.LocalObjectReference `json:"machineConfigServerConfig,omitempty"`
 	MachineConfigServerConfigHash *string                  `json:"machineConfigServerConfigHash,omitempty"`
-	CloudConfigRef                *v1.LocalObjectReference `json:"cloudConfigRef,omitempty"`
+	CloudConfig                   *v1.LocalObjectReference `json:"cloudConfig,omitempty"`
 	CloudConfigHash               *string                  `json:"cloudConfigHash,omitempty"`
 	ManagementGlobalConfig        *string                  `json:"managementGlobalConfig,omitempty"`
 }
@@ -37,11 +37,11 @@ func IgnitionPayloadRendererInputs() *IgnitionPayloadRendererInputsApplyConfigur
 	return &IgnitionPayloadRendererInputsApplyConfiguration{}
 }
 
-// WithMachineConfigServerConfigRef sets the MachineConfigServerConfigRef field in the declarative configuration to the given value
+// WithMachineConfigServerConfig sets the MachineConfigServerConfig field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the MachineConfigServerConfigRef field is set to the value of the last call.
-func (b *IgnitionPayloadRendererInputsApplyConfiguration) WithMachineConfigServerConfigRef(value v1.LocalObjectReference) *IgnitionPayloadRendererInputsApplyConfiguration {
-	b.MachineConfigServerConfigRef = &value
+// If called multiple times, the MachineConfigServerConfig field is set to the value of the last call.
+func (b *IgnitionPayloadRendererInputsApplyConfiguration) WithMachineConfigServerConfig(value v1.LocalObjectReference) *IgnitionPayloadRendererInputsApplyConfiguration {
+	b.MachineConfigServerConfig = &value
 	return b
 }
 
@@ -53,11 +53,11 @@ func (b *IgnitionPayloadRendererInputsApplyConfiguration) WithMachineConfigServe
 	return b
 }
 
-// WithCloudConfigRef sets the CloudConfigRef field in the declarative configuration to the given value
+// WithCloudConfig sets the CloudConfig field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the CloudConfigRef field is set to the value of the last call.
-func (b *IgnitionPayloadRendererInputsApplyConfiguration) WithCloudConfigRef(value v1.LocalObjectReference) *IgnitionPayloadRendererInputsApplyConfiguration {
-	b.CloudConfigRef = &value
+// If called multiple times, the CloudConfig field is set to the value of the last call.
+func (b *IgnitionPayloadRendererInputsApplyConfiguration) WithCloudConfig(value v1.LocalObjectReference) *IgnitionPayloadRendererInputsApplyConfiguration {
+	b.CloudConfig = &value
 	return b
 }
 

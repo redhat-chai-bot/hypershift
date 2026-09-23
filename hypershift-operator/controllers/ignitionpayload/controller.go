@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/utils/ptr"
 
 	"github.com/google/uuid"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -75,10 +76,10 @@ func (r *Reconciler) configMapToPayloads() handler.EventHandler {
 
 func referencesConfigMap(payload *ignitionv1alpha1.IgnitionPayload, name string) bool {
 	inputs := payload.Spec.RendererInputs
-	if inputs.MachineConfigServerConfigRef.Name == name || (inputs.CloudConfigRef != nil && inputs.CloudConfigRef.Name == name) {
+	if inputs.MachineConfigServerConfig.Name == name || (inputs.CloudConfig != nil && inputs.CloudConfig.Name == name) {
 		return true
 	}
-	for _, ref := range append(append([]corev1.LocalObjectReference{}, payload.Spec.RolloutConfigRefs...), payload.Spec.MgmtConfigRefs...) {
+	for _, ref := range append(append([]corev1.LocalObjectReference{}, payload.Spec.RolloutConfig...), payload.Spec.MgmtConfig...) {
 		if ref.Name == name {
 			return true
 		}
@@ -121,8 +122,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	// A management-only input refresh must preserve the token advertised to
 	// existing consumers. Replace the bytes behind current rather than creating
 	// a third live token. This is the readiness-first migration contract.
-	if payload.Status.Current != nil && payload.Status.Current.RolloutHash == rolloutHash {
-		if payload.Status.Current.ConfigHash != identityHash {
+	if current := payload.Status.CurrentRef(); current != nil && current.RolloutHash == rolloutHash {
+		if current.ConfigHash != identityHash {
 			if r.Renderer == nil {
 				return ctrl.Result{}, r.setGenerated(ctx, payload, metav1.ConditionFalse, "RendererUnavailable", "payload renderer is not configured")
 			}
@@ -130,11 +131,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 			if err != nil {
 				return ctrl.Result{}, r.setGenerated(ctx, payload, metav1.ConditionFalse, "RenderFailed", err.Error())
 			}
-			if err := r.Store.Put(ctx, payload, identityHash, payload.Status.Current.Token, bytes); err != nil {
+			if err := r.Store.Put(ctx, payload, identityHash, current.Token, bytes); err != nil {
 				return ctrl.Result{}, fmt.Errorf("refresh current payload: %w", err)
 			}
 		}
-		stored := &StoredPayload{Token: payload.Status.Current.Token, IdentityHash: identityHash}
+		stored := &StoredPayload{Token: current.Token, IdentityHash: identityHash}
 		if err := r.updateCurrent(ctx, payload, stored, rolloutHash); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -184,17 +185,29 @@ func (r *Reconciler) findOrRender(ctx context.Context, payload *ignitionv1alpha1
 
 func (r *Reconciler) resolveInput(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload) (string, string, string, error) {
 	inputs := payload.Spec.RendererInputs
+	if payload.Spec.PullSecretName == "" {
+		return "", "", "", fmt.Errorf("pull secret name is required")
+	}
+	pullSecret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: payload.Namespace, Name: payload.Spec.PullSecretName}, pullSecret); err != nil {
+		return "", "", "", fmt.Errorf("get pull secret %q: %w", payload.Spec.PullSecretName, err)
+	}
+	pullSecretBytes, ok := pullSecret.Data[corev1.DockerConfigJsonKey]
+	if !ok {
+		return "", "", "", fmt.Errorf("pull secret %q is missing %q", payload.Spec.PullSecretName, corev1.DockerConfigJsonKey)
+	}
+	pullSecretHash := supportutil.HashSimple(string(pullSecretBytes))
 	mcs := &corev1.ConfigMap{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: payload.Namespace, Name: inputs.MachineConfigServerConfigRef.Name}, mcs); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Namespace: payload.Namespace, Name: inputs.MachineConfigServerConfig.Name}, mcs); err != nil {
 		return "", "", "", fmt.Errorf("get machine-config-server config: %w", err)
 	}
 	if mcs.Data["configuration-hash"] != inputs.MachineConfigServerConfigHash {
 		return "", "", "", fmt.Errorf("machine-config-server configmap is out of date, waiting for update %s != %s", mcs.Data["configuration-hash"], inputs.MachineConfigServerConfigHash)
 	}
 	cloudHash := ""
-	if inputs.CloudConfigRef != nil {
+	if inputs.CloudConfig != nil {
 		cloud := &corev1.ConfigMap{}
-		if err := r.Get(ctx, client.ObjectKey{Namespace: payload.Namespace, Name: inputs.CloudConfigRef.Name}, cloud); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Namespace: payload.Namespace, Name: inputs.CloudConfig.Name}, cloud); err != nil {
 			return "", "", "", fmt.Errorf("get cloud config: %w", err)
 		}
 		cloudHash = supportutil.HashConfigMapData(cloud.Data)
@@ -202,17 +215,21 @@ func (r *Reconciler) resolveInput(ctx context.Context, payload *ignitionv1alpha1
 			return "", "", "", fmt.Errorf("cloud config %s/%s hash mismatch (expected %s, got %s), waiting for update", cloud.Namespace, cloud.Name, inputs.CloudConfigHash, cloudHash)
 		}
 	}
-	rolloutItems, err := r.gatherRolloutItems(ctx, payload.Namespace, payload.Spec.RolloutConfigRefs)
+	rolloutItems, err := r.gatherRolloutItems(ctx, payload.Namespace, payload.Spec.RolloutConfig)
 	if err != nil {
 		return "", "", "", err
 	}
-	managementConfig, err := r.gatherManagement(ctx, payload.Namespace, payload.Spec.MgmtConfigRefs)
+	managementConfig, err := r.gatherManagement(ctx, payload.Namespace, payload.Spec.MgmtConfig)
 	if err != nil {
 		return "", "", "", err
 	}
 	rolloutConfig := joinConfig(rolloutItems)
 	allConfig := joinConfig(append(rolloutItems, managementConfig...))
-	identity := supportutil.HashSimple(strings.Join([]string{allConfig, payload.Spec.ReleaseImage, payload.Spec.PullSecretName, payload.Spec.OSStream, inputs.ManagementGlobalConfig, inputs.MachineConfigServerConfigHash, cloudHash}, "\x00"))
+	// Pull-secret bytes affect image lookup and generated bytes, but rotating a
+	// Secret in place must not roll every NodePool. Keep its content in the
+	// identity hash only; changing the selected Secret name remains a deliberate
+	// rollout input below.
+	identity := supportutil.HashSimple(strings.Join([]string{allConfig, payload.Spec.ReleaseImage, payload.Spec.PullSecretName, pullSecretHash, payload.Spec.OSStream, inputs.ManagementGlobalConfig, inputs.MachineConfigServerConfigHash, cloudHash}, "\x00"))
 	rollout := supportutil.HashSimple(strings.Join([]string{rolloutConfig, payload.Spec.ReleaseImage, payload.Spec.PullSecretName, payload.Spec.OSStream, payload.Spec.RolloutGlobalConfig}, "\x00"))
 	return allConfig, identity, rollout, nil
 }
@@ -281,33 +298,33 @@ func joinConfig(items []string) string {
 func (r *Reconciler) updateCurrent(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, stored *StoredPayload, rolloutHash string) error {
 	// Once the consumer reports the old generation drained, retirement is
 	// independent of whether a new rollout is happening in this reconciliation.
-	if previous := payload.Status.Previous; previous != nil && payload.Spec.RetiredGeneration >= previous.Generation {
+	if previous := payload.Status.PreviousRef(); previous != nil && ptr.Deref(payload.Spec.RetiredGeneration, -1) >= ptr.Deref(previous.Generation, -1) {
 		if err := r.Store.Delete(ctx, payload, previous.Token); err != nil {
 			return err
 		}
 	}
 	return statuspatching.PatchStatus(ctx, r.Client, payload, func() error {
-		current := payload.Status.Current
-		if previous := payload.Status.Previous; previous != nil && payload.Spec.RetiredGeneration >= previous.Generation {
-			payload.Status.Previous = nil
+		current := payload.Status.CurrentRef()
+		if previous := payload.Status.PreviousRef(); previous != nil && ptr.Deref(payload.Spec.RetiredGeneration, -1) >= ptr.Deref(previous.Generation, -1) {
+			payload.Status.SetPrevious(nil)
 		}
 		if current != nil && current.RolloutHash == rolloutHash {
 			current.ConfigHash = stored.IdentityHash
+			payload.Status.SetCurrent(current)
 			return nil
 		}
 		nextGeneration := int64(0)
 		if current != nil {
-			nextGeneration = current.Generation + 1
-			// Keep at most current and previous entries. A new rollout evicts the
-			// older previous token even if the consumer did not explicitly retire it.
-			if payload.Status.Previous != nil && payload.Status.Previous.Token != current.Token {
-				if err := r.Store.Delete(ctx, payload, payload.Status.Previous.Token); err != nil {
-					return err
-				}
+			nextGeneration = ptr.Deref(current.Generation, -1) + 1
+			// A rollout cannot replace an unretired previous generation. Keeping
+			// only two generation references makes the bounded handoff explicit:
+			// consumers must acknowledge the previous generation before advancing.
+			if previous := payload.Status.PreviousRef(); previous != nil && ptr.Deref(payload.Spec.RetiredGeneration, -1) < ptr.Deref(previous.Generation, -1) {
+				return fmt.Errorf("wait for consumer retirement acknowledgement for generation %d before creating another rollout", ptr.Deref(previous.Generation, -1))
 			}
-			payload.Status.Previous = current.DeepCopy()
+			payload.Status.SetPrevious(current.DeepCopy())
 		}
-		payload.Status.Current = &ignitionv1alpha1.PayloadReference{ConfigHash: stored.IdentityHash, RolloutHash: rolloutHash, Token: stored.Token, Generation: nextGeneration}
+		payload.Status.SetCurrent(&ignitionv1alpha1.PayloadReference{ConfigHash: stored.IdentityHash, RolloutHash: rolloutHash, Token: stored.Token, Generation: ptr.To(nextGeneration)})
 		meta.SetStatusCondition(&payload.Status.Conditions, metav1.Condition{Type: ignitionv1alpha1.IgnitionReachedCondition, Status: metav1.ConditionFalse, Reason: "WaitingForIgnition", Message: "Waiting for a node to fetch the current payload", ObservedGeneration: payload.Generation, LastTransitionTime: metav1.Now()})
 		return nil
 	})

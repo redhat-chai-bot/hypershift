@@ -16,13 +16,13 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: '`.status.current.generation`'
+    - jsonPath: .status.current.generation
       name: Generation
       type: integer
-    - jsonPath: '`.status.conditions[?(@.type=="PayloadGenerated")].status`'
+    - jsonPath: .status.conditions[?(@.type=="PayloadGenerated")].status
       name: Generated
       type: string
-    - jsonPath: '`.status.conditions[?(@.type=="IgnitionReached")].status`'
+    - jsonPath: .status.conditions[?(@.type=="IgnitionReached")].status
       name: Reached
       type: string
     name: v1alpha1
@@ -51,11 +51,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec is written by a consumer such as the NodePool or Karpenter
+            description: spec is written by a consumer such as the NodePool or Karpenter
               controller.
             properties:
               additionalTrustBundle:
-                description: AdditionalTrustBundle optionally identifies the CA bundle
+                description: additionalTrustBundle optionally identifies the CA bundle
                   ConfigMap.
                 properties:
                   name:
@@ -69,9 +69,9 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
-              mgmtConfigRefs:
+              mgmtConfig:
                 description: |-
-                  MgmtConfigRefs are management-side-only ConfigMaps. Changes refresh the
+                  mgmtConfig are management-side-only ConfigMaps. Changes refresh the
                   bytes behind the current token without advancing rollout generation.
                 items:
                   description: |-
@@ -89,35 +89,37 @@ spec:
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
+                maxItems: 100
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
               osStream:
-                description: OSStream selects the RHEL stream used for generated payloads.
+                description: osStream selects the RHEL stream used for generated payloads.
+                maxLength: 253
+                minLength: 1
                 type: string
               pullSecretName:
-                description: PullSecretName names the Secret in this namespace used
+                description: pullSecretName names the Secret in this namespace used
                   to pull ReleaseImage.
+                maxLength: 253
                 minLength: 1
                 type: string
               releaseImage:
-                description: ReleaseImage is the OCP release image providing machine-config
+                description: releaseImage is the OCP release image providing machine-config
                   binaries.
+                maxLength: 2048
                 minLength: 1
                 type: string
               rendererInputs:
                 description: |-
-                  RendererInputs contains renderer-only data that is deliberately distinct
+                  rendererInputs contains renderer-only data that is deliberately distinct
                   from rollout inputs. It is written by the consumer and read by the payload controller.
                 properties:
-                  cloudConfigHash:
-                    description: CloudConfigHash is HashConfigMapData over CloudConfigRef
-                      and prevents stale cloud config from rendering.
-                    type: string
-                  cloudConfigRef:
+                  cloudConfig:
                     description: |-
-                      CloudConfigRef identifies the Azure or OpenStack cloud configuration ConfigMap.
+                      cloudConfig identifies the Azure or OpenStack cloud configuration ConfigMap.
                       It is absent for platforms without cloud configuration input.
                     properties:
                       name:
@@ -131,14 +133,15 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
-                  machineConfigServerConfigHash:
-                    description: MachineConfigServerConfigHash is the backward-compatible
-                      HostedCluster configuration hash.
+                  cloudConfigHash:
+                    description: cloudConfigHash is HashConfigMapData over CloudConfigRef
+                      and prevents stale cloud config from rendering.
+                    maxLength: 253
                     minLength: 1
                     type: string
-                  machineConfigServerConfigRef:
+                  machineConfigServerConfig:
                     description: |-
-                      MachineConfigServerConfigRef identifies the HCP-owned machine-config-server ConfigMap.
+                      machineConfigServerConfig identifies the HCP-owned machine-config-server ConfigMap.
                       The payload controller verifies its configuration-hash before rendering.
                     properties:
                       name:
@@ -152,33 +155,41 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                  machineConfigServerConfigHash:
+                    description: machineConfigServerConfigHash is the backward-compatible
+                      HostedCluster configuration hash.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
                   managementGlobalConfig:
                     description: |-
-                      ManagementGlobalConfig is canonical full global configuration. It changes
+                      managementGlobalConfig is canonical full global configuration. It changes
                       payload identity but not rollout identity, so replacement nodes get current
                       content while existing nodes remain untouched.
+                    maxLength: 1048576
+                    minLength: 1
                     type: string
                 required:
+                - machineConfigServerConfig
                 - machineConfigServerConfigHash
-                - machineConfigServerConfigRef
                 type: object
                 x-kubernetes-validations:
-                - message: machineConfigServerConfigRef.name is required
-                  rule: self.machineConfigServerConfigRef.name.size() > 0
-                - message: cloudConfigRef and cloudConfigHash must be specified together
-                  rule: '!has(self.cloudConfigRef) ? self.cloudConfigHash.size() ==
-                    0 : self.cloudConfigRef.name.size() > 0 && self.cloudConfigHash.size()
-                    > 0'
+                - message: machineConfigServerConfig.name is required
+                  rule: self.machineConfigServerConfig.name.size() > 0
+                - message: cloudConfig and cloudConfigHash must be specified together
+                  rule: has(self.cloudConfig) == has(self.cloudConfigHash) && (!has(self.cloudConfig)
+                    || (self.cloudConfig.name.size() > 0 && self.cloudConfigHash.size()
+                    > 0))
               retiredGeneration:
                 description: |-
-                  RetiredGeneration tells the payload controller that all nodes using this
+                  retiredGeneration tells the payload controller that all nodes using this
                   generation have drained and the previous token may be deleted.
                 format: int64
                 minimum: 0
                 type: integer
-              rolloutConfigRefs:
-                description: RolloutConfigRefs are ConfigMaps whose changes require
-                  a new rollout generation.
+              rolloutConfig:
+                description: rolloutConfig are ConfigMaps whose changes require a
+                  new rollout generation.
                 items:
                   description: |-
                     LocalObjectReference contains enough information to let you locate the
@@ -195,13 +206,17 @@ spec:
                       type: string
                   type: object
                   x-kubernetes-map-type: atomic
+                maxItems: 100
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
               rolloutGlobalConfig:
-                description: RolloutGlobalConfig is the canonical subset whose change
+                description: rolloutGlobalConfig is the canonical subset whose change
                   requires nodes to roll.
+                maxLength: 1048576
+                minLength: 1
                 type: string
             required:
             - pullSecretName
@@ -209,12 +224,13 @@ spec:
             - rendererInputs
             type: object
           status:
-            description: Status is written by the payload controller and the serving
+            description: status is written by the payload controller and the serving
               tier as documented above.
+            minProperties: 1
             properties:
               conditions:
                 description: |-
-                  Conditions is a map keyed by type. PayloadGenerated is controller-owned and
+                  conditions is a map keyed by type. PayloadGenerated is controller-owned and
                   IgnitionReached is written by the serving tier without replacing other status fields.
                 items:
                   description: Condition contains details for one aspect of the current
@@ -270,31 +286,36 @@ spec:
                   - status
                   - type
                   type: object
+                maxItems: 100
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
               current:
-                description: Current is owned by the payload controller and identifies
+                description: current is owned by the payload controller and identifies
                   the newest generated payload.
                 properties:
                   configHash:
-                    description: ConfigHash identifies the complete validated renderer
+                    description: configHash identifies the complete validated renderer
                       input.
+                    maxLength: 253
                     minLength: 1
                     type: string
                   generation:
-                    description: Generation advances only when RolloutHash changes.
+                    description: generation advances only when RolloutHash changes.
                     format: int64
                     minimum: 0
                     type: integer
                   rolloutHash:
-                    description: RolloutHash identifies the rollout-relevant subset
+                    description: rolloutHash identifies the rollout-relevant subset
                       of input.
+                    maxLength: 253
                     minLength: 1
                     type: string
                   token:
-                    description: Token is the opaque store key served to booting nodes.
+                    description: token is the opaque store key served to booting nodes.
+                    maxLength: 253
                     minLength: 1
                     type: string
                 required:
@@ -304,26 +325,29 @@ spec:
                 - token
                 type: object
               previous:
-                description: Previous is owned by the payload controller and remains
+                description: previous is owned by the payload controller and remains
                   servable while a rollout drains.
                 properties:
                   configHash:
-                    description: ConfigHash identifies the complete validated renderer
+                    description: configHash identifies the complete validated renderer
                       input.
+                    maxLength: 253
                     minLength: 1
                     type: string
                   generation:
-                    description: Generation advances only when RolloutHash changes.
+                    description: generation advances only when RolloutHash changes.
                     format: int64
                     minimum: 0
                     type: integer
                   rolloutHash:
-                    description: RolloutHash identifies the rollout-relevant subset
+                    description: rolloutHash identifies the rollout-relevant subset
                       of input.
+                    maxLength: 253
                     minLength: 1
                     type: string
                   token:
-                    description: Token is the opaque store key served to booting nodes.
+                    description: token is the opaque store key served to booting nodes.
+                    maxLength: 253
                     minLength: 1
                     type: string
                 required:

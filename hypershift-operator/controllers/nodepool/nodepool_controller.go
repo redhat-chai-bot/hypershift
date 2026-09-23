@@ -490,7 +490,7 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		return ctrl.Result{RequeueAfter: duration}, nil
 	}
 
-	ready, legacyUserDataName, err := r.reconcileIgnitionPayloadConsumer(ctx, payload, token)
+	ready, drainingLegacy, err := r.reconcileIgnitionPayloadConsumer(ctx, payload, token)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -518,7 +518,7 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		}
 		return ctrl.Result{}, err
 	}
-	if err := r.retireIgnitionPayloadGeneration(ctx, payload, capi, legacyUserDataName); err != nil {
+	if err := r.retireIgnitionPayloadGeneration(ctx, payload, capi, drainingLegacy); err != nil {
 		return ctrl.Result{}, fmt.Errorf("retire ignition payload generation: %w", err)
 	}
 

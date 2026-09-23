@@ -15,7 +15,7 @@ tests:
         releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
         pullSecretName: pull-secret
         rendererInputs:
-          machineConfigServerConfigRef:
+          machineConfigServerConfig:
             name: machine-config-server
           machineConfigServerConfigHash: 4a9c23b1
   - name: when machine config server hash is missing it should fail
@@ -29,7 +29,7 @@ tests:
         releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
         pullSecretName: pull-secret
         rendererInputs:
-          machineConfigServerConfigRef:
+          machineConfigServerConfig:
             name: machine-config-server
     expectedError: "machineConfigServerConfigHash"
   - name: when cloud config reference has no hash it should fail
@@ -43,12 +43,12 @@ tests:
         releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
         pullSecretName: pull-secret
         rendererInputs:
-          machineConfigServerConfigRef:
+          machineConfigServerConfig:
             name: machine-config-server
           machineConfigServerConfigHash: 4a9c23b1
-          cloudConfigRef:
+          cloudConfig:
             name: azure-cloud-config
-    expectedError: "cloudConfigRef and cloudConfigHash must be specified together"
+    expectedError: "cloudConfig and cloudConfigHash must be specified together"
   - name: when cloud config hash has no reference it should fail
     initial: |
       apiVersion: hypershift.openshift.io/v1alpha1
@@ -60,8 +60,8 @@ tests:
         releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
         pullSecretName: pull-secret
         rendererInputs:
-          machineConfigServerConfigRef:
+          machineConfigServerConfig:
             name: machine-config-server
           machineConfigServerConfigHash: 4a9c23b1
           cloudConfigHash: 3fd52b11
-    expectedError: "cloudConfigRef and cloudConfigHash must be specified together"
+    expectedError: "cloudConfig and cloudConfigHash must be specified together"

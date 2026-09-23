@@ -2215,6 +2215,12 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 			watchedResources := sets.New[string]()
 			for _, resource := range r.managedResources() {
 				resourceType := fmt.Sprintf("%T", resource)
+				if (resourceType == "*v1.Service" || resourceType == "*v1.Route") && testCase.platform != "ibmcloud" {
+					// The fixture does not provide release metadata, so a non-IBM
+					// reconciliation deliberately leaves CPO serving instead of
+					// constructing a proxy with an incompatible fallback image.
+					continue
+				}
 				switch resourceType {
 				case "*v1.Endpoints", "*v1.Job", "*v1.StatefulSet", "*v1beta1.NodePool", "*v1beta1.AWSEndpointService":
 					// We watch Endpoints for changes to the kubernetes Endpoint in the default namespace
@@ -2228,8 +2234,6 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 
 					// We watch AWSEndpointServices to propagate conditions to the HostedCluster
 
-					// Ignition payload workloads are now HO-owned, so their Services and
-					// Routes are watched like every other child resource.
 					continue
 				}
 				watchedResources.Insert(resourceType)

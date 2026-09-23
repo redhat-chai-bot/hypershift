@@ -12,7 +12,6 @@ import (
 	hyperapi "github.com/openshift/hypershift/support/api"
 	"github.com/openshift/hypershift/support/backwardcompat"
 	"github.com/openshift/hypershift/support/capabilities"
-	supportutil "github.com/openshift/hypershift/support/util"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,8 +52,8 @@ func ReconcileKarpenterIgnitionPayload(ctx context.Context, c client.Client, cg 
 	desired := ignitionv1alpha1.IgnitionPayloadSpec{
 		ReleaseImage: cg.nodePool.Spec.Release.Image, PullSecretName: cg.hostedCluster.Spec.PullSecret.Name,
 		OSStream: cg.resolvedRHELStreamForBootImage, RolloutGlobalConfig: cg.rolloutGlobalConfig,
-		RolloutConfigRefs: refs, MgmtConfigRefs: []corev1.LocalObjectReference{{Name: management.Name}},
-		RendererInputs: ignitionv1alpha1.IgnitionPayloadRendererInputs{MachineConfigServerConfigRef: corev1.LocalObjectReference{Name: "machine-config-server"}, MachineConfigServerConfigHash: hash, ManagementGlobalConfig: cg.globalConfig},
+		RolloutConfig: refs, MgmtConfig: []corev1.LocalObjectReference{{Name: management.Name}},
+		RendererInputs: ignitionv1alpha1.IgnitionPayloadRendererInputs{MachineConfigServerConfig: corev1.LocalObjectReference{Name: "machine-config-server"}, MachineConfigServerConfigHash: hash, ManagementGlobalConfig: cg.globalConfig},
 	}
 	if cg.hostedCluster.Spec.AdditionalTrustBundle != nil {
 		desired.AdditionalTrustBundle = cg.hostedCluster.Spec.AdditionalTrustBundle.DeepCopy()
@@ -138,8 +137,8 @@ func (r *NodePoolReconciler) reconcileIgnitionPayload(ctx context.Context, nodeP
 	if err != nil {
 		return nil, err
 	}
-	desired.RolloutConfigRefs = rolloutRefs
-	desired.MgmtConfigRefs = []corev1.LocalObjectReference{managementRef}
+	desired.RolloutConfig = rolloutRefs
+	desired.MgmtConfig = []corev1.LocalObjectReference{managementRef}
 	desired.RetiredGeneration = payload.Spec.RetiredGeneration
 	if !reflect.DeepEqual(payload.Spec, desired) {
 		before := payload.DeepCopy()
@@ -169,12 +168,12 @@ func (r *NodePoolReconciler) desiredIgnitionPayloadSpec(ctx context.Context, pay
 		PullSecretName:      configGenerator.hostedCluster.Spec.PullSecret.Name,
 		OSStream:            configGenerator.resolvedRHELStreamForBootImage,
 		RolloutGlobalConfig: configGenerator.rolloutGlobalConfig,
-		RolloutConfigRefs:   rolloutRefs,
-		MgmtConfigRefs:      []corev1.LocalObjectReference{{Name: payload.Name + "-management"}},
+		RolloutConfig:       rolloutRefs,
+		MgmtConfig:          []corev1.LocalObjectReference{{Name: payload.Name + "-management"}},
 		RendererInputs: ignitionv1alpha1.IgnitionPayloadRendererInputs{
-			MachineConfigServerConfigRef:  corev1.LocalObjectReference{Name: "machine-config-server"},
+			MachineConfigServerConfig:     corev1.LocalObjectReference{Name: "machine-config-server"},
 			MachineConfigServerConfigHash: hcConfigHash,
-			CloudConfigRef:                cloudRef,
+			CloudConfig:                   cloudRef,
 			CloudConfigHash:               cloudHash,
 			ManagementGlobalConfig:        configGenerator.globalConfig,
 		},
@@ -297,59 +296,50 @@ func (r *NodePoolReconciler) deleteIgnitionPayload(ctx context.Context, namespac
 // reconcileIgnitionPayloadConsumer turns a generated CR status into the CAPI
 // bootstrap contract. It deliberately waits for PayloadGenerated before touching
 // CAPI, so invalid inputs cannot trigger a rollout with no servable payload.
-func (r *NodePoolReconciler) reconcileIgnitionPayloadConsumer(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, token *Token) (bool, string, error) {
-	if payload.Status.Current == nil {
-		return false, "", nil
+type drainingLegacySecrets struct {
+	userData string
+	token    string
+}
+
+func (r *NodePoolReconciler) reconcileIgnitionPayloadConsumer(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, token *Token) (bool, drainingLegacySecrets, error) {
+	if payload.Status.CurrentRef() == nil {
+		return false, drainingLegacySecrets{}, nil
 	}
-	current := payload.Status.Current
+	current := payload.Status.CurrentRef()
 	token.ignitionPayload = payload
 	userData := token.UserDataSecret()
 	if _, err := r.CreateOrUpdate(ctx, r.Client, userData, func() error {
 		return token.reconcileUserDataSecret(ctrl.LoggerFrom(ctx), userData, current.Token)
 	}); err != nil {
-		return false, "", fmt.Errorf("reconcile payload userdata Secret: %w", err)
+		return false, drainingLegacySecrets{}, fmt.Errorf("reconcile payload userdata Secret: %w", err)
 	}
-	legacyUserDataName := ""
-	if payload.Status.Previous == nil && current.Generation == 0 {
+	draining := drainingLegacySecrets{}
+	if payload.Status.PreviousRef() == nil && ptr.Deref(current.Generation, -1) == 0 {
 		if oldConfigVersion := token.nodePool.Annotations[nodePoolAnnotationCurrentConfigVersion]; oldConfigVersion != "" && oldConfigVersion != current.ConfigHash {
-			legacyUserDataName = fmt.Sprintf("%s-%s-%s", UserDataSecrePrefix, token.nodePool.Name, oldConfigVersion)
+			draining.userData = fmt.Sprintf("%s-%s-%s", UserDataSecrePrefix, token.nodePool.Name, oldConfigVersion)
+			draining.token = fmt.Sprintf("%s-%s-%s", TokenSecretPrefix, token.nodePool.Name, oldConfigVersion)
 		}
 	}
 	if token.nodePool.Spec.Management.UpgradeType != hyperv1.UpgradeTypeInPlace {
-		return true, legacyUserDataName, nil
+		return true, draining, nil
 	}
 
-	// HCCO intentionally stays on its legacy Secret shape for this release. The
-	// secret is written before CAPI's MachineSet target annotation is advanced.
-	store := &ignitionpayload.SecretBackedStore{Client: r.Client, Namespace: payload.Namespace}
-	stored, err := store.Get(ctx, current.Token)
-	if err != nil {
-		return false, "", fmt.Errorf("read current payload for in-place compatibility: %w", err)
+	// HCCO intentionally stays on the legacy token Secret contract. Write the
+	// current Secret before CAPI advances its target annotation; retain the old
+	// one until the MachineSet reports the drain complete.
+	if _, err := token.ReconcileLegacyInPlacePayloadSecret(ctx, current.ConfigHash); err != nil {
+		return false, drainingLegacySecrets{}, fmt.Errorf("reconcile in-place compatibility Secret: %w", err)
 	}
-	compressed, err := supportutil.CompressAndEncode(stored.Payload)
-	if err != nil {
-		return false, "", fmt.Errorf("compress current payload for in-place compatibility: %w", err)
+	if previous := payload.Status.PreviousRef(); previous != nil && previous.ConfigHash != current.ConfigHash {
+		draining.token = fmt.Sprintf("%s-%s-%s", TokenSecretPrefix, token.nodePool.Name, previous.ConfigHash)
 	}
-	legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: fmt.Sprintf("%s-%s-%s", TokenSecretPrefix, token.nodePool.Name, current.ConfigHash)}}
-	if _, err := r.CreateOrUpdate(ctx, r.Client, legacy, func() error {
-		legacy.Immutable = ptr.To(false)
-		legacy.Annotations = map[string]string{nodePoolAnnotation: client.ObjectKeyFromObject(token.nodePool).String()}
-		legacy.Data = map[string][]byte{
-			"payload":                    compressed.Bytes(),
-			TokenSecretReleaseKey:        []byte(token.nodePool.Spec.Release.Image),
-			TokenSecretReleaseVersionKey: []byte(token.releaseImage.Version()),
-		}
-		return nil
-	}); err != nil {
-		return false, "", fmt.Errorf("reconcile in-place compatibility Secret: %w", err)
-	}
-	return true, legacyUserDataName, nil
+	return true, draining, nil
 }
 
 // retireIgnitionPayloadGeneration is level-triggered: only a completed CAPI
 // rollout may retire previous bytes, and retrying it is harmless.
-func (r *NodePoolReconciler) retireIgnitionPayloadGeneration(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, capi *CAPI, legacyUserDataName string) error {
-	if payload.Status.Current == nil || (payload.Status.Previous == nil && legacyUserDataName == "") {
+func (r *NodePoolReconciler) retireIgnitionPayloadGeneration(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, capi *CAPI, drainingLegacy drainingLegacySecrets) error {
+	if payload.Status.CurrentRef() == nil || (payload.Status.PreviousRef() == nil && drainingLegacy.userData == "" && drainingLegacy.token == "") {
 		return nil
 	}
 	complete := false
@@ -373,20 +363,25 @@ func (r *NodePoolReconciler) retireIgnitionPayloadGeneration(ctx context.Context
 	if !complete {
 		return nil
 	}
-	if payload.Status.Previous != nil {
-		oldUserData := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: fmt.Sprintf("%s-%s-%d", UserDataSecrePrefix, capi.nodePool.Name, payload.Status.Previous.Generation)}}
+	if previous := payload.Status.PreviousRef(); previous != nil {
+		oldUserData := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: fmt.Sprintf("%s-%s-%d", UserDataSecrePrefix, capi.nodePool.Name, previous.Generation)}}
 		if err := client.IgnoreNotFound(r.Delete(ctx, oldUserData)); err != nil {
 			return err
 		}
 	}
-	if legacyUserDataName != "" {
-		if err := client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: legacyUserDataName}})); err != nil {
+	if drainingLegacy.userData != "" {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: drainingLegacy.userData}})); err != nil {
+			return err
+		}
+	}
+	if drainingLegacy.token != "" {
+		if err := client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: payload.Namespace, Name: drainingLegacy.token}})); err != nil {
 			return err
 		}
 	}
 	before := payload.DeepCopy()
-	if payload.Status.Previous != nil && payload.Spec.RetiredGeneration < payload.Status.Previous.Generation {
-		payload.Spec.RetiredGeneration = payload.Status.Previous.Generation
+	if previous := payload.Status.PreviousRef(); previous != nil && ptr.Deref(payload.Spec.RetiredGeneration, -1) < ptr.Deref(previous.Generation, -1) {
+		payload.Spec.RetiredGeneration = previous.Generation
 		if err := r.Patch(ctx, payload, client.MergeFrom(before)); err != nil {
 			return err
 		}

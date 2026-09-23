@@ -1330,6 +1330,35 @@ func TestGetUserDataSecret(t *testing.T) {
 			expectedSecret: "matching-secret",
 		},
 		{
+			name:      "When current config is selected and multiple userdata Secrets exist, it should return the exact selected Secret",
+			namespace: "test-namespace",
+			nodeClass: &hyperkarpenterv1.OpenshiftEC2NodeClass{ObjectMeta: metav1.ObjectMeta{
+				Name: "test-nodeclass",
+				Annotations: map[string]string{
+					openshiftEC2NodeClassCurrentConfigVersionAnnotation: "current-config",
+				},
+			}},
+			objects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "user-data-old", Namespace: "test-namespace", Labels: map[string]string{karpenterutil.ManagedByKarpenterLabel: "true"}, Annotations: map[string]string{hyperkarpenterv1.TokenSecretNodePoolAnnotation: "test-namespace/" + expectedNodePoolName, nodePoolCurrentConfigVersionAnnotation: "old-config"}}},
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "user-data-current", Namespace: "test-namespace", Labels: map[string]string{karpenterutil.ManagedByKarpenterLabel: "true"}, Annotations: map[string]string{hyperkarpenterv1.TokenSecretNodePoolAnnotation: "test-namespace/" + expectedNodePoolName, nodePoolCurrentConfigVersionAnnotation: "current-config"}}},
+			},
+			expectedSecret: "user-data-current",
+		},
+		{
+			name:      "When selected config is absent but generated userdata Secrets exist, it should wait instead of using list order",
+			namespace: "test-namespace",
+			nodeClass: &hyperkarpenterv1.OpenshiftEC2NodeClass{ObjectMeta: metav1.ObjectMeta{
+				Name: "test-nodeclass",
+				Annotations: map[string]string{
+					openshiftEC2NodeClassCurrentConfigVersionAnnotation: "current-config",
+				},
+			}},
+			objects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "user-data-old", Namespace: "test-namespace", Labels: map[string]string{karpenterutil.ManagedByKarpenterLabel: "true"}, Annotations: map[string]string{hyperkarpenterv1.TokenSecretNodePoolAnnotation: "test-namespace/" + expectedNodePoolName, nodePoolCurrentConfigVersionAnnotation: "old-config"}}},
+			},
+			expectedError: errKarpenterUserDataSecretNotFound,
+		},
+		{
 			name:          "when no secrets exist it should return errKarpenterUserDataSecretNotFound",
 			namespace:     "test-namespace",
 			nodeClass:     nodeClass,

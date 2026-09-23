@@ -1575,13 +1575,41 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 	// release-coupled CPO. Reconcile it immediately after the HCP exists so a
 	// CPO->HO handoff keeps the public endpoint serving throughout the cutover.
 	report.executeOrBlock("IgnitionPayloadWorkloads", func() error {
-		proxyImage := r.HypershiftOperatorImage
-		if releaseImage != nil {
-			if image, ok := releaseImage.ComponentImages()["haproxy-router"]; ok {
-				proxyImage = image
+		proxyImage := ""
+		if hcp.Spec.Platform.Type != hyperv1.IBMCloudPlatform {
+			if releaseImage == nil {
+				// The operator image is not an HAProxy image. Keep CPO serving and
+				// retry once release metadata can provide the release-matched proxy.
+				requeueAfter := 10 * time.Second
+				report.requestRequeue(&requeueAfter)
+				return nil
+			}
+			var ok bool
+			proxyImage, ok = releaseImage.ComponentImages()["haproxy-router"]
+			if !ok || proxyImage == "" {
+				requeueAfter := 10 * time.Second
+				report.requestRequeue(&requeueAfter)
+				return nil
 			}
 		}
-		return r.reconcileIgnitionPayloadWorkloads(ctx, hcluster, hcp, proxyImage, createOrUpdate)
+		if err := r.reconcileIgnitionPayloadWorkloads(ctx, hcluster, hcp, proxyImage, releaseProvider, createOrUpdate); err != nil {
+			return err
+		}
+		ready, err := r.reconcileIgnitionPayloadCutover(ctx, hcp)
+		if err != nil {
+			// The existing CPO endpoint remains enabled until the replacement
+			// passes every health check. Retry instead of treating normal rollout
+			// convergence as a reconciliation failure.
+			requeueAfter := 5 * time.Second
+			report.requestRequeue(&requeueAfter)
+			return nil
+		}
+		if !ready {
+			requeueAfter := 5 * time.Second
+			report.requestRequeue(&requeueAfter)
+			return nil
+		}
+		return nil
 	})
 
 	// Phase 8a: Components that don't depend on release image version.
@@ -1753,9 +1781,6 @@ func (r *HostedClusterReconciler) reconcileCoreHCPChain(
 				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp)))); err != nil {
 			return err
 		}
-		// This is the N->N+1 migration branch point. Older CPOs honor it by
-		// deleting their ignition component; newer CPOs no longer contain it.
-		hcp.Annotations[hyperv1.DisableIgnitionServerAnnotation] = "true"
 		return nil
 	})
 	if err != nil {
