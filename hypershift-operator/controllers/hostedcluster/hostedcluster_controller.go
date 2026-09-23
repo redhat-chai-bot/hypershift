@@ -1571,6 +1571,19 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 		return nil
 	})
 
+	// The ignition system is owned by the HyperShift operator, not by the
+	// release-coupled CPO. Reconcile it immediately after the HCP exists so a
+	// CPO->HO handoff keeps the public endpoint serving throughout the cutover.
+	report.executeOrBlock("IgnitionPayloadWorkloads", func() error {
+		proxyImage := r.HypershiftOperatorImage
+		if releaseImage != nil {
+			if image, ok := releaseImage.ComponentImages()["haproxy-router"]; ok {
+				proxyImage = image
+			}
+		}
+		return r.reconcileIgnitionPayloadWorkloads(ctx, hcluster, hcp, proxyImage, createOrUpdate)
+	})
+
 	// Phase 8a: Components that don't depend on release image version.
 	// Evaluated before ReleaseImageVersion so they run even when the
 	// release image is unavailable.
@@ -1732,12 +1745,18 @@ func (r *HostedClusterReconciler) reconcileCoreHCPChain(
 
 	hcp = controlplaneoperator.HostedControlPlane(controlPlaneNamespace, hcluster.Name)
 	_, err = createOrUpdate(ctx, r.Client, hcp, func() error {
-		return reconcileHostedControlPlane(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded,
+		if err := reconcileHostedControlPlane(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded,
 			annotationsForCertRenewal(log,
 				hcp,
 				shouldCheckForStaleCerts(hcluster, defaultToControlPlaneV2),
 				r.kasServingCertHashFromSecret(ctx, hcp),
-				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))))
+				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp)))); err != nil {
+			return err
+		}
+		// This is the N->N+1 migration branch point. Older CPOs honor it by
+		// deleting their ignition component; newer CPOs no longer contain it.
+		hcp.Annotations[hyperv1.DisableIgnitionServerAnnotation] = "true"
+		return nil
 	})
 	if err != nil {
 		return hcp, fmt.Errorf("failed to reconcile hostedcontrolplane: %w", err)
@@ -2887,7 +2906,6 @@ func reconcileHostedControlPlaneAnnotations(hcp *hyperv1.HostedControlPlane, hcl
 			delete(hcp.Annotations, key)
 		}
 	}
-
 	prefixesToSync := []string{
 		hyperv1.IdentityProviderOverridesAnnotationPrefix,
 		hyperv1.ResourceRequestOverrideAnnotationPrefix,

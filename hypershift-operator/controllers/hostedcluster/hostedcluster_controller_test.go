@@ -2216,7 +2216,7 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 			for _, resource := range r.managedResources() {
 				resourceType := fmt.Sprintf("%T", resource)
 				switch resourceType {
-				case "*v1.Endpoints", "*v1.Job", "*v1.StatefulSet", "*v1beta1.NodePool", "*v1beta1.AWSEndpointService", "*v1.Service", "*v1.Route":
+				case "*v1.Endpoints", "*v1.Job", "*v1.StatefulSet", "*v1beta1.NodePool", "*v1beta1.AWSEndpointService":
 					// We watch Endpoints for changes to the kubernetes Endpoint in the default namespace
 					// but never create an Endpoints resource
 
@@ -2228,8 +2228,8 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 
 					// We watch AWSEndpointServices to propagate conditions to the HostedCluster
 
-					// "*v1.Service", "*v1.Route" are not in the main controller path after this PR:
-					// https://github.com/openshift/hypershift/pull/6133
+					// Ignition payload workloads are now HO-owned, so their Services and
+					// Routes are watched like every other child resource.
 					continue
 				}
 				watchedResources.Insert(resourceType)

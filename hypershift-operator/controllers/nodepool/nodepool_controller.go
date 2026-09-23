@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests"
 	haproxy "github.com/openshift/hypershift/hypershift-operator/controllers/nodepool/apiserver-haproxy"
@@ -34,6 +35,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -152,6 +154,7 @@ func (r *NodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.enqueueNodePoolsForCloudConfig), builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 			return obj.GetName() == "azure-cloud-config" || obj.GetName() == "openstack-cloud-config"
 		}))).
+		Watches(&ignitionv1alpha1.IgnitionPayload{}, handler.EnqueueRequestsFromMapFunc(r.enqueueNodePoolForIgnitionPayload)).
 		WithOptions(controller.Options{
 			RateLimiter:             workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 10*time.Second),
 			MaxConcurrentReconciles: 10,
@@ -177,6 +180,24 @@ func (r *NodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	r.recorder = mgr.GetEventRecorderFor("nodepool-controller")
 
+	return nil
+}
+
+func (r *NodePoolReconciler) enqueueNodePoolForIgnitionPayload(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !strings.HasPrefix(obj.GetName(), ignitionPayloadNamePrefix) {
+		return nil
+	}
+	nodePools := &hyperv1.NodePoolList{}
+	if err := r.List(ctx, nodePools); err != nil {
+		return nil
+	}
+	name := strings.TrimPrefix(obj.GetName(), ignitionPayloadNamePrefix)
+	for i := range nodePools.Items {
+		np := &nodePools.Items[i]
+		if np.Name == name && manifests.HostedControlPlaneNamespace(np.Namespace, np.Spec.ClusterName) == obj.GetNamespace() {
+			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(np)}}
+		}
+	}
 	return nil
 }
 
@@ -447,6 +468,14 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		}
 	}
 
+	// Project the new consumer-owned contract before reconciling the frozen
+	// token-Secret path. During the N->N+1 migration both paths coexist, but
+	// the new payload controller alone owns rendering state once selected.
+	payload, err := r.reconcileIgnitionPayload(ctx, nodePool, configGenerator, haproxyRawConfig)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconcile ignition payload: %w", err)
+	}
+
 	// If reconciliation is paused we return before modifying any state
 	capi, err := newCAPI(token, infraID)
 	if err != nil {
@@ -461,36 +490,23 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		return ctrl.Result{RequeueAfter: duration}, nil
 	}
 
-	// 2. - Reconcile towards expected state of the world.
-	if err := token.Reconcile(ctx); err != nil {
+	ready, legacyUserDataName, err := r.reconcileIgnitionPayloadConsumer(ctx, payload, token)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	// Seed the rollout config annotation on first reconcile after operator upgrade.
-	// This must happen before any rollout decision to prevent spurious rollouts.
-	if _, ok := nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig]; !ok {
-		if nodePool.Annotations == nil {
-			nodePool.Annotations = make(map[string]string)
-		}
-		nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = token.RolloutHashWithoutVersion()
+	if !ready {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if reached := meta.FindStatusCondition(payload.Status.Conditions, ignitionv1alpha1.IgnitionReachedCondition); reached != nil {
+		SetStatusCondition(&nodePool.Status.Conditions, hyperv1.NodePoolCondition{
+			Type: hyperv1.NodePoolReachedIgnitionEndpoint, Status: corev1.ConditionStatus(reached.Status), Reason: reached.Reason,
+			Message: reached.Message, ObservedGeneration: nodePool.Generation,
+		})
 	}
 
 	// non automated infrastructure should not have any machine level cluster-api components
 	if !isAutomatedMachineManagement(nodePool) {
-		targetConfigHash := token.HashWithoutVersion()
-		targetPayloadConfigHash := token.Hash()
-		targetRolloutConfigHash := token.RolloutHashWithoutVersion()
 		nodePool.Status.Version = releaseImage.Version()
-		if nodePool.Annotations == nil {
-			nodePool.Annotations = make(map[string]string)
-		}
-		if nodePool.Annotations[nodePoolAnnotationCurrentConfig] != targetConfigHash {
-			log.Info("Config update complete",
-				"previous", nodePool.Annotations[nodePoolAnnotationCurrentConfig], "new", targetConfigHash)
-			nodePool.Annotations[nodePoolAnnotationCurrentConfig] = targetConfigHash
-		}
-		nodePool.Annotations[nodePoolAnnotationCurrentConfigVersion] = targetPayloadConfigHash
-		nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = targetRolloutConfigHash
 		return ctrl.Result{}, nil
 	}
 
@@ -501,6 +517,9 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if err := r.retireIgnitionPayloadGeneration(ctx, payload, capi, legacyUserDataName); err != nil {
+		return ctrl.Result{}, fmt.Errorf("retire ignition payload generation: %w", err)
 	}
 
 	// Set scale-from-zero annotations if provider is configured and platform is supported
@@ -598,6 +617,9 @@ func isArchAndPlatformSupported(nodePool *hyperv1.NodePool) bool {
 }
 
 func (r *NodePoolReconciler) delete(ctx context.Context, nodePool *hyperv1.NodePool, controlPlaneNamespace string) error {
+	if err := r.deleteIgnitionPayload(ctx, controlPlaneNamespace, ignitionPayloadNamePrefix+nodePool.Name); err != nil {
+		return fmt.Errorf("delete ignition payload: %w", err)
+	}
 	capi := &CAPI{
 		Token: &Token{
 			CreateOrUpdateProvider: r.CreateOrUpdateProvider,

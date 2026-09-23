@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests/ignitionserver"
 	"github.com/openshift/hypershift/support/backwardcompat"
@@ -65,6 +66,9 @@ type Token struct {
 	globalConfigHash          []byte
 	cloudConfigHash           []byte
 	userData                  *userData
+	// ignitionPayload selects the new CRD-backed path. The frozen token-secret
+	// module remains available only for old control planes during N->N+1 drain.
+	ignitionPayload *ignitionv1alpha1.IgnitionPayload
 }
 
 // userData contains the input necessary to generate the user data secret
@@ -286,9 +290,29 @@ func (t *Token) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+// ReconcileIgnitionPayloadUserData writes the consumer-owned bootstrap Secret
+// for a generated payload. It intentionally does not create a legacy token
+// Secret: normal Karpenter provisioning uses the CRD/store contract.
+func (t *Token) ReconcileIgnitionPayloadUserData(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload) (*corev1.Secret, error) {
+	if payload == nil || payload.Status.Current == nil {
+		return nil, fmt.Errorf("ignition payload is not generated")
+	}
+	t.ignitionPayload = payload
+	secret := t.UserDataSecret()
+	if _, err := t.CreateOrUpdate(ctx, t.Client, secret, func() error {
+		return t.reconcileUserDataSecret(ctrl.LoggerFrom(ctx), secret, payload.Status.Current.Token)
+	}); err != nil {
+		return nil, err
+	}
+	return secret, nil
+}
+
 const UserDataSecrePrefix = "user-data"
 
 func (t *Token) UserDataSecret() *corev1.Secret {
+	if t.ignitionPayload != nil && t.ignitionPayload.Status.Current != nil {
+		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: t.controlplaneNamespace, Name: fmt.Sprintf("%s-%s-%d", UserDataSecrePrefix, t.ConfigGenerator.nodePool.GetName(), t.ignitionPayload.Status.Current.Generation)}}
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: t.controlplaneNamespace,
@@ -429,7 +453,15 @@ func (t *Token) reconcileUserDataSecret(log logr.Logger, userDataSecret *corev1.
 
 	encodedCACert := base64.StdEncoding.EncodeToString(t.userData.caCert)
 	encodedToken := base64.StdEncoding.EncodeToString([]byte(token))
-	ignConfig := ignConfig(encodedCACert, encodedToken, t.userData.ignitionServerEndpoint, t.Hash(), t.userData.proxy, t.nodePool)
+	targetConfigVersion := t.Hash()
+	if t.ignitionPayload != nil && t.ignitionPayload.Status.Current != nil {
+		targetConfigVersion = t.ignitionPayload.Status.Current.ConfigHash
+	}
+	payloadRef := ""
+	if t.ignitionPayload != nil {
+		payloadRef = t.ignitionPayload.Namespace + "/" + t.ignitionPayload.Name
+	}
+	ignConfig := ignConfig(encodedCACert, encodedToken, t.userData.ignitionServerEndpoint, targetConfigVersion, payloadRef, t.userData.proxy, t.nodePool)
 	userDataValue, err := json.Marshal(ignConfig)
 	if err != nil {
 		return fmt.Errorf("failed to marshal ignition config: %w", err)
@@ -464,7 +496,7 @@ func setKarpenterAMILabels(log logr.Logger, userDataSecret *corev1.Secret, regio
 	return nil
 }
 
-func ignConfig(encodedCACert, encodedToken, endpoint, targetConfigVersionHash string, proxy *configv1.Proxy, nodePool *hyperv1.NodePool) ignitionapi.Config {
+func ignConfig(encodedCACert, encodedToken, endpoint, targetConfigVersionHash, payloadRef string, proxy *configv1.Proxy, nodePool *hyperv1.NodePool) ignitionapi.Config {
 	cfg := ignitionapi.Config{
 		Ignition: ignitionapi.Ignition{
 			Version: "3.2.0",
@@ -499,6 +531,9 @@ func ignConfig(encodedCACert, encodedToken, endpoint, targetConfigVersionHash st
 				},
 			},
 		},
+	}
+	if payloadRef != "" {
+		cfg.Ignition.Config.Merge[0].HTTPHeaders = append(cfg.Ignition.Config.Merge[0].HTTPHeaders, ignitionapi.HTTPHeader{Name: "IgnitionPayload", Value: ptr.To(payloadRef)})
 	}
 	if proxy.Status.HTTPProxy != "" {
 		cfg.Ignition.Proxy.HTTPProxy = ptr.To(proxy.Status.HTTPProxy)

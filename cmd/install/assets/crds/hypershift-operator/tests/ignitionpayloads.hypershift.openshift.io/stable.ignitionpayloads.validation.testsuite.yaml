@@ -1,0 +1,67 @@
+apiVersion: apiextensions.k8s.io/v1
+name: "IgnitionPayload validation"
+crdName: ignitionpayloads.hypershift.openshift.io
+version: v1alpha1
+tests:
+  onCreate:
+  - name: when renderer inputs include a machine config server hash it should pass
+    initial: |
+      apiVersion: hypershift.openshift.io/v1alpha1
+      kind: IgnitionPayload
+      metadata:
+        name: workers
+        namespace: default
+      spec:
+        releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+        pullSecretName: pull-secret
+        rendererInputs:
+          machineConfigServerConfigRef:
+            name: machine-config-server
+          machineConfigServerConfigHash: 4a9c23b1
+  - name: when machine config server hash is missing it should fail
+    initial: |
+      apiVersion: hypershift.openshift.io/v1alpha1
+      kind: IgnitionPayload
+      metadata:
+        name: workers
+        namespace: default
+      spec:
+        releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+        pullSecretName: pull-secret
+        rendererInputs:
+          machineConfigServerConfigRef:
+            name: machine-config-server
+    expectedError: "machineConfigServerConfigHash"
+  - name: when cloud config reference has no hash it should fail
+    initial: |
+      apiVersion: hypershift.openshift.io/v1alpha1
+      kind: IgnitionPayload
+      metadata:
+        name: workers
+        namespace: default
+      spec:
+        releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+        pullSecretName: pull-secret
+        rendererInputs:
+          machineConfigServerConfigRef:
+            name: machine-config-server
+          machineConfigServerConfigHash: 4a9c23b1
+          cloudConfigRef:
+            name: azure-cloud-config
+    expectedError: "cloudConfigRef and cloudConfigHash must be specified together"
+  - name: when cloud config hash has no reference it should fail
+    initial: |
+      apiVersion: hypershift.openshift.io/v1alpha1
+      kind: IgnitionPayload
+      metadata:
+        name: workers
+        namespace: default
+      spec:
+        releaseImage: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+        pullSecretName: pull-secret
+        rendererInputs:
+          machineConfigServerConfigRef:
+            name: machine-config-server
+          machineConfigServerConfigHash: 4a9c23b1
+          cloudConfigHash: 3fd52b11
+    expectedError: "cloudConfigRef and cloudConfigHash must be specified together"

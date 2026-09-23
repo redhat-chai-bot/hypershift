@@ -87,7 +87,7 @@ all: build e2e tests
 
 pre-commit: all verify test
 
-build: hypershift-operator control-plane-operator control-plane-pki-operator karpenter-operator hypershift product-cli
+build: hypershift-operator ignition-server control-plane-operator control-plane-pki-operator karpenter-operator hypershift product-cli
 
 .PHONY: update
 update: api-deps workspace-sync deps api api-docs clients docs-aggregate
@@ -228,6 +228,11 @@ tests: generate
 hypershift-operator:
 	$(GO_BUILD_RECIPE) -o $(OUT_DIR)/hypershift-operator ./hypershift-operator
 
+# Build the HO-owned, per-HCP ignition server and payload controller binary.
+.PHONY: ignition-server
+ignition-server:
+	$(GO_BUILD_RECIPE) -o $(OUT_DIR)/ignition-server ./ignition-server
+
 .PHONY: karpenter-operator
 karpenter-operator:
 	$(GO_BUILD_RECIPE) -o $(OUT_DIR)/karpenter-operator ./karpenter-operator
@@ -295,9 +300,14 @@ hypershift-api: $(CONTROLLER_GEN) $(CODE_GEN)
 	(cd ./api && $(CODE_GEN) empty-partial-schemas)
 	(cd ./api && $(CODE_GEN) schemapatch)
 	(cd ./api && $(CODE_GEN) crd-manifest-merge --manifest-merge:payload-manifest-path ./hypershift/v1beta1/featuregates)
+	# The feature-gate generator terminates a new API report with an extra blank
+	# line. Normalize it here so generated new API packages satisfy diff checks.
+	for f in ./api/hypershift/v1alpha1/zz_generated.featuregated-crd-manifests.yaml ./vendor/github.com/openshift/hypershift/api/hypershift/v1alpha1/zz_generated.featuregated-crd-manifests.yaml; do [ ! -f $$f ] || sed -i '$${/^$$/d;}' $$f; done
 
 	# Move final CRDs to the install folder.
 	mv ./api/hypershift/v1beta1/zz_generated.crd-manifests cmd/install/assets/crds/hypershift-operator/
+	mv ./api/hypershift/v1alpha1/zz_generated.crd-manifests/* cmd/install/assets/crds/hypershift-operator/zz_generated.crd-manifests/
+	rmdir ./api/hypershift/v1alpha1/zz_generated.crd-manifests
 
 	# Copy featuregate manifests alongside CRDs for envtest.
 	mkdir -p cmd/install/assets/crds/hypershift-operator/payload-manifests/featuregates

@@ -17,19 +17,15 @@ import (
 	"github.com/openshift/hypershift/support/backwardcompat"
 	"github.com/openshift/hypershift/support/capabilities"
 	"github.com/openshift/hypershift/support/globalconfig"
+	"github.com/openshift/hypershift/support/ignitionconfig"
 	"github.com/openshift/hypershift/support/releaseinfo"
 	supportutil "github.com/openshift/hypershift/support/util"
 
 	configv1 "github.com/openshift/api/config/v1"
-	configv1alpha1 "github.com/openshift/api/config/v1alpha1"
-	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
-	"github.com/openshift/api/operator/v1alpha1"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	serializer "k8s.io/apimachinery/pkg/runtime/serializer/json"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
@@ -364,61 +360,7 @@ func (cg *ConfigGenerator) doParse(configs []corev1.ConfigMap, managementSideCon
 // defaultAndValidateConfigManifest validates a manifest is a MCO consumabled supported API
 // and default core labels.
 func (cg *ConfigGenerator) defaultAndValidateConfigManifest(manifest []byte) ([]byte, error) {
-	scheme := runtime.NewScheme()
-	_ = mcfgv1.Install(scheme)
-	_ = v1alpha1.Install(scheme)
-	_ = configv1.Install(scheme)
-	_ = configv1alpha1.Install(scheme)
-
-	manifest = backwardcompat.NormalizeV1Alpha1ClusterImagePolicy(manifest)
-
-	yamlSerializer := serializer.NewSerializerWithOptions(
-		serializer.DefaultMetaFactory, scheme, scheme,
-		serializer.SerializerOptions{Yaml: true, Pretty: true, Strict: false},
-	)
-
-	cr, _, err := yamlSerializer.Decode(manifest, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding config: %w", err)
-	}
-
-	switch obj := cr.(type) {
-	case *mcfgv1.MachineConfig:
-		if obj.Labels == nil {
-			obj.Labels = map[string]string{}
-		}
-		obj.Labels["machineconfiguration.openshift.io/role"] = "worker"
-		manifest, err = api.CompatibleYAMLEncode(cr, yamlSerializer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode machine config after defaulting it: %w", err)
-		}
-	case *v1alpha1.ImageContentSourcePolicy:
-	case *configv1.ImageDigestMirrorSet:
-	case *configv1.ClusterImagePolicy:
-	case *mcfgv1.KubeletConfig:
-		obj.Spec.MachineConfigPoolSelector = &metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				"machineconfiguration.openshift.io/mco-built-in": "",
-			},
-		}
-		manifest, err = api.CompatibleYAMLEncode(cr, yamlSerializer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode kubelet config after setting built-in MCP selector: %w", err)
-		}
-	case *mcfgv1.ContainerRuntimeConfig:
-		obj.Spec.MachineConfigPoolSelector = &metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				"machineconfiguration.openshift.io/mco-built-in": "",
-			},
-		}
-		manifest, err = api.CompatibleYAMLEncode(cr, yamlSerializer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode container runtime config after setting built-in MCP selector: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported config type: %T", obj)
-	}
-	return manifest, err
+	return ignitionconfig.Normalize(manifest)
 }
 
 // globalConfigString computes a string representation of the global config

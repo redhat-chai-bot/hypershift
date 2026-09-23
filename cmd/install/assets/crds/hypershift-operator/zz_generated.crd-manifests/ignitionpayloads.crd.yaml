@@ -1,0 +1,344 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api.openshift.io/merged-by-featuregates: "true"
+    include.release.openshift.io/ibm-cloud-managed: "true"
+    include.release.openshift.io/self-managed-high-availability: "true"
+  name: ignitionpayloads.hypershift.openshift.io
+spec:
+  group: hypershift.openshift.io
+  names:
+    kind: IgnitionPayload
+    listKind: IgnitionPayloadList
+    plural: ignitionpayloads
+    shortNames:
+    - ignpayload
+    singular: ignitionpayload
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: '`.status.current.generation`'
+      name: Generation
+      type: integer
+    - jsonPath: '`.status.conditions[?(@.type=="PayloadGenerated")].status`'
+      name: Generated
+      type: string
+    - jsonPath: '`.status.conditions[?(@.type=="IgnitionReached")].status`'
+      name: Reached
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          IgnitionPayload is one consumer's request for an ignition payload. Consumers own
+          spec; the payload controller owns Current, Previous, and PayloadGenerated; the
+          serving tier may only set IgnitionReached through a field-scoped status patch.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec is written by a consumer such as the NodePool or Karpenter
+              controller.
+            properties:
+              additionalTrustBundle:
+                description: AdditionalTrustBundle optionally identifies the CA bundle
+                  ConfigMap.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              mgmtConfigRefs:
+                description: |-
+                  MgmtConfigRefs are management-side-only ConfigMaps. Changes refresh the
+                  bytes behind the current token without advancing rollout generation.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              osStream:
+                description: OSStream selects the RHEL stream used for generated payloads.
+                type: string
+              pullSecretName:
+                description: PullSecretName names the Secret in this namespace used
+                  to pull ReleaseImage.
+                minLength: 1
+                type: string
+              releaseImage:
+                description: ReleaseImage is the OCP release image providing machine-config
+                  binaries.
+                minLength: 1
+                type: string
+              rendererInputs:
+                description: |-
+                  RendererInputs contains renderer-only data that is deliberately distinct
+                  from rollout inputs. It is written by the consumer and read by the payload controller.
+                properties:
+                  cloudConfigHash:
+                    description: CloudConfigHash is HashConfigMapData over CloudConfigRef
+                      and prevents stale cloud config from rendering.
+                    type: string
+                  cloudConfigRef:
+                    description: |-
+                      CloudConfigRef identifies the Azure or OpenStack cloud configuration ConfigMap.
+                      It is absent for platforms without cloud configuration input.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  machineConfigServerConfigHash:
+                    description: MachineConfigServerConfigHash is the backward-compatible
+                      HostedCluster configuration hash.
+                    minLength: 1
+                    type: string
+                  machineConfigServerConfigRef:
+                    description: |-
+                      MachineConfigServerConfigRef identifies the HCP-owned machine-config-server ConfigMap.
+                      The payload controller verifies its configuration-hash before rendering.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  managementGlobalConfig:
+                    description: |-
+                      ManagementGlobalConfig is canonical full global configuration. It changes
+                      payload identity but not rollout identity, so replacement nodes get current
+                      content while existing nodes remain untouched.
+                    type: string
+                required:
+                - machineConfigServerConfigHash
+                - machineConfigServerConfigRef
+                type: object
+                x-kubernetes-validations:
+                - message: machineConfigServerConfigRef.name is required
+                  rule: self.machineConfigServerConfigRef.name.size() > 0
+                - message: cloudConfigRef and cloudConfigHash must be specified together
+                  rule: '!has(self.cloudConfigRef) ? self.cloudConfigHash.size() ==
+                    0 : self.cloudConfigRef.name.size() > 0 && self.cloudConfigHash.size()
+                    > 0'
+              retiredGeneration:
+                description: |-
+                  RetiredGeneration tells the payload controller that all nodes using this
+                  generation have drained and the previous token may be deleted.
+                format: int64
+                minimum: 0
+                type: integer
+              rolloutConfigRefs:
+                description: RolloutConfigRefs are ConfigMaps whose changes require
+                  a new rollout generation.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              rolloutGlobalConfig:
+                description: RolloutGlobalConfig is the canonical subset whose change
+                  requires nodes to roll.
+                type: string
+            required:
+            - pullSecretName
+            - releaseImage
+            - rendererInputs
+            type: object
+          status:
+            description: Status is written by the payload controller and the serving
+              tier as documented above.
+            properties:
+              conditions:
+                description: |-
+                  Conditions is a map keyed by type. PayloadGenerated is controller-owned and
+                  IgnitionReached is written by the serving tier without replacing other status fields.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              current:
+                description: Current is owned by the payload controller and identifies
+                  the newest generated payload.
+                properties:
+                  configHash:
+                    description: ConfigHash identifies the complete validated renderer
+                      input.
+                    minLength: 1
+                    type: string
+                  generation:
+                    description: Generation advances only when RolloutHash changes.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rolloutHash:
+                    description: RolloutHash identifies the rollout-relevant subset
+                      of input.
+                    minLength: 1
+                    type: string
+                  token:
+                    description: Token is the opaque store key served to booting nodes.
+                    minLength: 1
+                    type: string
+                required:
+                - configHash
+                - generation
+                - rolloutHash
+                - token
+                type: object
+              previous:
+                description: Previous is owned by the payload controller and remains
+                  servable while a rollout drains.
+                properties:
+                  configHash:
+                    description: ConfigHash identifies the complete validated renderer
+                      input.
+                    minLength: 1
+                    type: string
+                  generation:
+                    description: Generation advances only when RolloutHash changes.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rolloutHash:
+                    description: RolloutHash identifies the rollout-relevant subset
+                      of input.
+                    minLength: 1
+                    type: string
+                  token:
+                    description: Token is the opaque store key served to booting nodes.
+                    minLength: 1
+                    type: string
+                required:
+                - configHash
+                - generation
+                - rolloutHash
+                - token
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

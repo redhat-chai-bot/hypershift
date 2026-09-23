@@ -8,6 +8,7 @@ COPY . .
 RUN make hypershift \
   && make hypershift-no-cgo \
   && make hypershift-operator \
+  && make ignition-server \
   && make product-cli \
   && make karpenter-operator
 
@@ -16,6 +17,7 @@ COPY --from=builder /hypershift/bin/hypershift \
                     /hypershift/bin/hypershift-no-cgo \
                     /hypershift/bin/hcp \
                     /hypershift/bin/hypershift-operator \
+                    /hypershift/bin/ignition-server \
                     /hypershift/bin/karpenter-operator \
      /usr/bin/
 

@@ -24,6 +24,8 @@ func main() {
 	}
 
 	root.AddCommand(cmd.NewStartCommand())
+	root.AddCommand(cmd.NewPayloadStartCommand())
+	root.AddCommand(cmd.NewPayloadControllerCommand())
 	root.AddCommand(cmd.NewRunLocalIgnitionProviderCommand())
 
 	if err := root.Execute(); err != nil {
