@@ -135,6 +135,7 @@ const (
 
 	controlPlaneOperatorSubcommandsLabel                 = "io.openshift.hypershift.control-plane-operator-subcommands"
 	controlPlaneOperatorSupportsKASCustomKubeconfigLabel = "io.openshift.hypershift.control-plane-operator-supports-kas-custom-kubeconfig"
+	controlPlaneOperatorSupportsIgnitionHandoffLabel     = "io.openshift.hypershift.control-plane-operator-supports-ignition-server-handoff"
 
 	controlPlaneOperatorAppliesManagementKASNetworkPolicyLabel = "io.openshift.hypershift.control-plane-operator-applies-management-kas-network-policy-label"
 	controlPlanePKIOperatorSignsCSRsLabel                      = "io.openshift.hypershift.control-plane-pki-operator-signs-csrs"
@@ -1546,6 +1547,7 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 	})
 
 	_, cpoSupportsKASCustomKubeconfig := controlPlaneOperatorImageLabels[controlPlaneOperatorSupportsKASCustomKubeconfigLabel]
+	_, cpoSupportsIgnitionHandoff := controlPlaneOperatorImageLabels[controlPlaneOperatorSupportsIgnitionHandoffLabel]
 	_, controlPlaneOperatorAppliesManagementKASNetworkPolicyLabel := controlPlaneOperatorImageLabels[controlPlaneOperatorAppliesManagementKASNetworkPolicyLabel]
 	_, controlPlanePKIOperatorSignsCSRs := controlPlaneOperatorImageLabels[controlPlanePKIOperatorSignsCSRsLabel]
 	// Default to true when labels are unavailable (pull secret outage) — all
@@ -1567,6 +1569,113 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 		}
 		if hcp == nil {
 			return fmt.Errorf("HCP object is nil")
+		}
+		return nil
+	})
+
+	// The ignition system is owned by the HyperShift operator, not by the
+	// release-coupled CPO. Reconcile it immediately after the HCP exists so a
+	// CPO->HO handoff keeps the public endpoint serving throughout the cutover.
+	report.executeOrBlock("IgnitionPayloadWorkloads", func() error {
+		supported, err := r.ignitionPayloadHandoffSupported(ctx, hcluster)
+		if err != nil {
+			return err
+		}
+		if !supported {
+			return nil
+		}
+		// Older release-coupled CPOs delete ignition resources when disabled and
+		// cannot participate in a no-gap handoff. Keep their legacy renderer and
+		// serving path untouched until the image advertises the handoff contract.
+		if !cpoSupportsIgnitionHandoff {
+			// A release rollback must re-enable the legacy CPO before this
+			// reconciler stops managing the replacement. Removing only the
+			// operator-owned value preserves explicit user disable requests.
+			if hcluster.Annotations[hyperv1.DisableIgnitionServerAnnotation] == payloadCutoverAnnotationValue {
+				before := hcluster.DeepCopy()
+				delete(hcluster.Annotations, hyperv1.DisableIgnitionServerAnnotation)
+				if err := r.Patch(ctx, hcluster, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+					return fmt.Errorf("restore CPO ignition ownership after capability loss: %w", err)
+				}
+				requeueAfter := 5 * time.Second
+				report.requestRequeue(&requeueAfter)
+			}
+			if hcp.Annotations[hyperv1.IgnitionPayloadHandoffReadyAnnotation] != "" {
+				before := hcp.DeepCopy()
+				delete(hcp.Annotations, hyperv1.IgnitionPayloadHandoffReadyAnnotation)
+				if err := r.Patch(ctx, hcp, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+					return fmt.Errorf("clear ignition payload handoff readiness after capability loss: %w", err)
+				}
+			}
+			return nil
+		}
+		if value, disabled := hcluster.Annotations[hyperv1.DisableIgnitionServerAnnotation]; disabled && value != payloadCutoverAnnotationValue {
+			// Respect an explicit user-owned disable annotation.
+			return nil
+		}
+		prepared, err := r.prepareIgnitionPayloadHandoff(ctx, hcluster, hcp)
+		if err != nil {
+			return err
+		}
+		if !prepared {
+			requeueAfter := 5 * time.Second
+			report.requestRequeue(&requeueAfter)
+			return nil
+		}
+		proxyImage := ""
+		if hcp.Spec.Platform.Type != hyperv1.IBMCloudPlatform {
+			if releaseImage == nil {
+				// The operator image is not an HAProxy image. Keep CPO serving and
+				// retry once release metadata can provide the release-matched proxy.
+				requeueAfter := 10 * time.Second
+				report.requestRequeue(&requeueAfter)
+				return nil
+			}
+			var ok bool
+			proxyImage, ok = releaseImage.ComponentImages()["haproxy-router"]
+			if !ok || proxyImage == "" {
+				requeueAfter := 10 * time.Second
+				report.requestRequeue(&requeueAfter)
+				return nil
+			}
+		}
+		securityContextUID := controlplanecomponent.DefaultSecurityContextUID
+		if r.SetDefaultSecurityContext {
+			var err error
+			securityContextUID, err = strconv.ParseInt(controlPlaneNamespace.Annotations[DefaultSecurityContextUIDAnnnotation], 10, 64)
+			if err != nil {
+				return fmt.Errorf("parse ignition workload security context UID: %w", err)
+			}
+		}
+		var ignitionImageProvider imageprovider.ReleaseImageProvider = imageprovider.NewFromImages(nil)
+		if releaseImage != nil {
+			ignitionImageProvider = imageprovider.New(releaseImage)
+		}
+		cpContext := controlplanecomponent.ControlPlaneContext{
+			Context:                   ctx,
+			Client:                    r.Client,
+			HCP:                       hcp,
+			ReleaseImageProvider:      ignitionImageProvider,
+			SetDefaultSecurityContext: r.SetDefaultSecurityContext,
+			DefaultSecurityContextUID: securityContextUID,
+		}
+		if err := r.reconcileIgnitionPayloadWorkloads(ctx, hcluster, cpContext, proxyImage, releaseProvider, createOrUpdate); err != nil {
+			return err
+		}
+		ready, err := r.reconcileIgnitionPayloadCutover(ctx, hcp)
+		if err != nil {
+			// The existing CPO endpoint remains enabled until the replacement
+			// passes every health check. Retry instead of treating normal rollout
+			// convergence as a reconciliation failure.
+			requeueAfter := 5 * time.Second
+			report.requestRequeue(&requeueAfter)
+			//nolint:nilerr // An unhealthy replacement is expected during rollout; the ready CPO endpoint stays enabled while we requeue.
+			return nil
+		}
+		if !ready {
+			requeueAfter := 5 * time.Second
+			report.requestRequeue(&requeueAfter)
+			return nil
 		}
 		return nil
 	})
@@ -1732,12 +1841,15 @@ func (r *HostedClusterReconciler) reconcileCoreHCPChain(
 
 	hcp = controlplaneoperator.HostedControlPlane(controlPlaneNamespace, hcluster.Name)
 	_, err = createOrUpdate(ctx, r.Client, hcp, func() error {
-		return reconcileHostedControlPlane(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded,
+		if err := reconcileHostedControlPlane(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded,
 			annotationsForCertRenewal(log,
 				hcp,
 				shouldCheckForStaleCerts(hcluster, defaultToControlPlaneV2),
 				r.kasServingCertHashFromSecret(ctx, hcp),
-				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))))
+				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp)))); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return hcp, fmt.Errorf("failed to reconcile hostedcontrolplane: %w", err)
@@ -2887,7 +2999,6 @@ func reconcileHostedControlPlaneAnnotations(hcp *hyperv1.HostedControlPlane, hcl
 			delete(hcp.Annotations, key)
 		}
 	}
-
 	prefixesToSync := []string{
 		hyperv1.IdentityProviderOverridesAnnotationPrefix,
 		hyperv1.ResourceRequestOverrideAnnotationPrefix,

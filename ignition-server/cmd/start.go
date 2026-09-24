@@ -15,6 +15,7 @@ import (
 	"time"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"github.com/openshift/hypershift/hypershift-operator/controllers/ignitionpayload"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/nodepool"
 	"github.com/openshift/hypershift/ignition-server/controllers"
 	hyperapi "github.com/openshift/hypershift/support/api"
@@ -25,6 +26,7 @@ import (
 	librarycrypto "github.com/openshift/library-go/pkg/crypto"
 
 	corev1 "k8s.io/api/core/v1"
+	toolscache "k8s.io/client-go/tools/cache"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -55,6 +57,216 @@ func init() {
 	metrics.Registry.MustRegister(
 		getRequestsPerNodePool,
 	)
+}
+
+// NewPayloadStartCommand starts the serving-only half of the IgnitionPayload
+// architecture. It deliberately does not register TokenSecretReconciler or a
+// renderer: generation is leader-elected in the HyperShift operator.
+func NewPayloadStartCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "ignition-payload-server", Short: "Starts the serving-only IgnitionPayload server"}
+	opts := Options{Addr: "0.0.0.0:9090", MetricsAddr: "0.0.0.0:8080", CertFile: "/var/run/secrets/ignition/serving-cert/tls.crt", KeyFile: "/var/run/secrets/ignition/serving-cert/tls.key"}
+	cmd.Flags().StringVar(&opts.Addr, "addr", opts.Addr, "Listen address")
+	cmd.Flags().StringVar(&opts.CertFile, "cert-file", opts.CertFile, "Path to the serving cert")
+	cmd.Flags().StringVar(&opts.KeyFile, "key-file", opts.KeyFile, "Path to the serving key")
+	cmd.Flags().StringVar(&opts.MetricsAddr, "metrics-addr", opts.MetricsAddr, "The address the metric endpoint binds to")
+	cmd.Flags().StringVar(&opts.TLSMinVersion, "tls-min-version", "", "Minimum TLS version")
+	cmd.Flags().StringSliceVar(&opts.TLSCipherSuites, "tls-cipher-suites", nil, "TLS cipher suites (comma-separated)")
+	cmd.Run = func(_ *cobra.Command, _ []string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() { <-sigs; cancel() }()
+		if err := runPayloadServer(ctx, opts); err != nil {
+			log.Fatal(err)
+		}
+	}
+	return cmd
+}
+
+// NewPayloadControllerCommand runs the singleton rendering half of the
+// IgnitionPayload architecture. It intentionally lives in the ignition-server
+// binary so it can be deployed per HostedControlPlane with the same image as
+// the serving tier, while controller-runtime leader election ensures that only
+// one replica performs expensive release-image work.
+func NewPayloadControllerCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "ignition-payload-controller", Short: "Starts the IgnitionPayload renderer"}
+	opts := Options{MetricsAddr: "0.0.0.0:8080", WorkDir: "/payloads", RegistryOverrides: map[string]string{}}
+	cmd.Flags().StringVar(&opts.WorkDir, "work-dir", opts.WorkDir, "Directory for release image extraction")
+	cmd.Flags().StringVar(&opts.MetricsAddr, "metrics-addr", opts.MetricsAddr, "The address the metric endpoint binds to")
+	cmd.Flags().StringToStringVar(&opts.RegistryOverrides, "registry-overrides", opts.RegistryOverrides, "Registry override map")
+	cmd.RunE = func(_ *cobra.Command, _ []string) error {
+		return runPayloadController(ctrl.SetupSignalHandler(), opts)
+	}
+	return cmd
+}
+
+func runPayloadController(ctx context.Context, opts Options) error {
+	namespace := os.Getenv(namespaceEnvVariableName)
+	if namespace == "" {
+		return fmt.Errorf("environment variable %s is empty, this is not supported", namespaceEnvVariableName)
+	}
+	restConfig := ctrl.GetConfigOrDie()
+	restConfig.UserAgent = "ignition-payload-controller"
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+		Scheme:                  hyperapi.Scheme,
+		Metrics:                 metricsserver.Options{BindAddress: opts.MetricsAddr},
+		Cache:                   cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}},
+		LeaderElection:          true,
+		LeaderElectionID:        "ignition-payload-controller.hypershift.openshift.io",
+		LeaderElectionNamespace: namespace,
+		HealthProbeBindAddress:  ":8081",
+	})
+	if err != nil {
+		return fmt.Errorf("create payload controller manager: %w", err)
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		return fmt.Errorf("add payload controller health check: %w", err)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		return fmt.Errorf("add payload controller readiness check: %w", err)
+	}
+	releaseProvider := &releaseinfo.ProviderWithOpenShiftImageRegistryOverridesDecorator{
+		Delegate: &releaseinfo.RegistryMirrorProviderDecorator{
+			Delegate:          &releaseinfo.CachedProvider{Inner: &releaseinfo.RegistryClientProvider{}, Cache: map[string]*releaseinfo.ReleaseImage{}},
+			RegistryOverrides: opts.RegistryOverrides,
+		},
+		OpenShiftImageRegistryOverrides: util.ConvertImageRegistryOverrideStringToMap(os.Getenv("OPENSHIFT_IMG_OVERRIDES")),
+	}
+	metadataProvider := &util.RegistryClientImageMetadataProvider{OpenShiftImageRegistryOverrides: util.ConvertImageRegistryOverrideStringToMap(os.Getenv("OPENSHIFT_IMG_OVERRIDES"))}
+	renderer := &ignitionpayload.MCORenderer{
+		Client: mgr.GetClient(), ReleaseProvider: releaseProvider, MetadataProvider: metadataProvider, WorkDir: opts.WorkDir,
+	}
+	if err := (&ignitionpayload.Reconciler{
+		Client:          mgr.GetClient(),
+		Renderer:        renderer,
+		ReleaseResolver: renderer,
+		Store:           &ignitionpayload.SecretBackedStore{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: namespace},
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("set up payload controller: %w", err)
+	}
+	return mgr.Start(ctx)
+}
+
+func runPayloadServer(ctx context.Context, opts Options) error {
+	namespace := os.Getenv(namespaceEnvVariableName)
+	if namespace == "" {
+		return fmt.Errorf("environment variable %s is empty, this is not supported", namespaceEnvVariableName)
+	}
+	certWatcher, err := certwatcher.New(opts.CertFile, opts.KeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load serving cert: %w", err)
+	}
+	restConfig := ctrl.GetConfigOrDie()
+	restConfig.UserAgent = "ignition-payload-server"
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+		Scheme:                 hyperapi.Scheme,
+		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddr},
+		Cache:                  cache.Options{DefaultNamespaces: map[string]cache.Config{namespace: {}}},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		return fmt.Errorf("create serving manager: %w", err)
+	}
+	if err := mgr.Add(certWatcher); err != nil {
+		return fmt.Errorf("add certificate watcher: %w", err)
+	}
+	server := &ignitionpayload.Server{Client: mgr.GetClient(), Store: &ignitionpayload.SecretBackedStore{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: namespace}, Namespace: namespace}
+	secretInformer, err := mgr.GetCache().GetInformer(ctx, &corev1.Secret{})
+	if err != nil {
+		return fmt.Errorf("get payload Secret informer: %w", err)
+	}
+	_, err = secretInformer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) { updatePayloadServerCache(server, obj) },
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			deletePayloadServerCache(server, oldObj)
+			updatePayloadServerCache(server, newObj)
+		},
+		DeleteFunc: func(obj interface{}) { deletePayloadServerCache(server, obj) },
+	})
+	if err != nil {
+		return fmt.Errorf("add payload Secret informer handler: %w", err)
+	}
+	go func() {
+		if err := mgr.Start(ctx); err != nil {
+			log.Printf("payload serving manager stopped: %v", err)
+		}
+	}()
+	go func() {
+		if mgr.GetCache().WaitForCacheSync(ctx) {
+			server.MarkCacheSynced()
+		}
+	}()
+	httpServer := &http.Server{
+		Addr:         opts.Addr,
+		Handler:      server,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		TLSConfig:    buildTLSConfig(certWatcher, opts),
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+	}
+	go func() { <-ctx.Done(); _ = httpServer.Shutdown(context.Background()) }()
+	if err := httpServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+func updatePayloadServerCache(server *ignitionpayload.Server, obj interface{}) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return
+	}
+	tokens, payload, legacy, err := ignitionpayload.LegacyPayloadFromSecret(secret)
+	if legacy {
+		server.SetLegacySecretReady(secret.Name, err == nil && len(payload) > 0)
+		if err != nil || len(payload) == 0 {
+			return
+		}
+		for _, token := range tokens {
+			server.Put(token, payload)
+		}
+		return
+	}
+	if secret.Labels["hypershift.openshift.io/ignition-payload-token"] == "" {
+		return
+	}
+	if stored, err := ignitionpayload.StoredPayloadFromSecret(secret); err == nil {
+		server.PutStored(stored)
+	} else if payload, ok := secret.Data["payload"]; ok {
+		// Tolerate entries created before owner-name labels were introduced. A
+		// read-through of newly written entries remains strict and owner-derived.
+		server.Put(secret.Labels["hypershift.openshift.io/ignition-payload-token"], payload)
+	}
+}
+
+func deletePayloadServerCache(server *ignitionpayload.Server, obj interface{}) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		if tombstone, ok := obj.(toolscache.DeletedFinalStateUnknown); ok {
+			secret, _ = tombstone.Obj.(*corev1.Secret)
+		}
+	}
+	if secret != nil && secret.Labels["hypershift.openshift.io/ignition-payload-token"] != "" {
+		server.Delete(secret.Labels["hypershift.openshift.io/ignition-payload-token"])
+	}
+	if secret != nil {
+		// Evict legacy tokens from labels even when their expiration has passed.
+		// LegacyPayloadFromSecret deliberately rejects expired Secrets, but a
+		// delete event must still remove bytes cached while the Secret was valid.
+		for _, label := range []string{ignitionpayload.LegacyTokenLabel, ignitionpayload.LegacyOldTokenLabel} {
+			if token := secret.Labels[label]; token != "" {
+				server.Delete(token)
+			}
+		}
+		tokens, _, legacy, _ := ignitionpayload.LegacyPayloadFromSecret(secret)
+		if legacy {
+			server.SetLegacySecretReady(secret.Name, true)
+			for _, token := range tokens {
+				server.Delete(token)
+			}
+		}
+	}
 }
 
 func buildTLSConfig(certWatcher *certwatcher.CertWatcher, opts Options) *tls.Config {

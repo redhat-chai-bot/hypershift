@@ -58,6 +58,24 @@ type CAPI struct {
 	upsert.ApplyProvider
 }
 
+func (c *CAPI) usesIgnitionPayload() bool {
+	return c.ignitionPayload != nil && c.ignitionPayload.Status.CurrentRef() != nil
+}
+
+func (c *CAPI) desiredConfigVersion() string {
+	if c.usesIgnitionPayload() {
+		return c.ignitionPayload.Status.CurrentRef().ConfigHash
+	}
+	return c.Hash()
+}
+
+func (c *CAPI) desiredRolloutConfig() string {
+	if c.usesIgnitionPayload() {
+		return c.ignitionPayload.Status.CurrentRef().RolloutHash
+	}
+	return c.RolloutHashWithoutVersion()
+}
+
 // hasStatusCapacity checks if a machine template has Status.Capacity populated
 // by the infrastructure provider (native scale-from-zero support).
 func hasStatusCapacity(template client.Object) bool {
@@ -632,7 +650,12 @@ func (c *CAPI) propagateVersionAndTemplate(log logr.Logger, machineDeployment *c
 	// management-side-only changes).
 	versionChanged := specUpdated // at this point, specUpdated is true only if version changed
 	currentRolloutConfigHash := c.nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig]
-	rolloutConfigChanged := currentRolloutConfigHash != "" && c.RolloutHashWithoutVersion() != currentRolloutConfigHash
+	rolloutConfigChanged := currentRolloutConfigHash != "" && c.desiredRolloutConfig() != currentRolloutConfigHash
+	if c.usesIgnitionPayload() {
+		// Generation advancement is represented by a new userdata Secret. It is
+		// already gated by PayloadGenerated in the NodePool reconciler.
+		rolloutConfigChanged = true
+	}
 	if versionChanged || rolloutConfigChanged {
 		targetDataSecretName := c.UserDataSecret().Name
 		if targetDataSecretName != ptr.Deref(machineDeployment.Spec.Template.Spec.Bootstrap.DataSecretName, "") {
@@ -680,9 +703,13 @@ func (c *CAPI) propagateVersionAndTemplateToMachineSet(log logr.Logger, machineS
 	// full rationale.
 	versionChanged := specUpdated
 	currentRolloutConfigHash := c.nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig]
-	rolloutConfigChanged := currentRolloutConfigHash != "" && c.RolloutHashWithoutVersion() != currentRolloutConfigHash
+	rolloutConfigChanged := currentRolloutConfigHash != "" && c.desiredRolloutConfig() != currentRolloutConfigHash
+	if c.usesIgnitionPayload() {
+		rolloutConfigChanged = true
+	}
 	if versionChanged || rolloutConfigChanged {
 		targetDataSecretName := c.UserDataSecret().Name
+		payloadGenerationAdvance := c.usesIgnitionPayload() && targetDataSecretName != ptr.Deref(machineSet.Spec.Template.Spec.Bootstrap.DataSecretName, "")
 		if targetDataSecretName != ptr.Deref(machineSet.Spec.Template.Spec.Bootstrap.DataSecretName, "") {
 			if rolloutConfigChanged {
 				log.Info("Starting config upgrade: Propagating new config to the MachineSet",
@@ -699,10 +726,16 @@ func (c *CAPI) propagateVersionAndTemplateToMachineSet(log logr.Logger, machineS
 		// upgrader when a version or config change is detected. For brand-new
 		// MachineSets, also initialize the current config version so the upgrade
 		// is a no-op.
-		targetConfigVersionHash := c.Hash()
-		machineSet.Annotations[nodePoolAnnotationTargetConfigVersion] = targetConfigVersionHash
-		if _, ok := machineSet.Annotations[nodePoolAnnotationCurrentConfigVersion]; !ok {
-			machineSet.Annotations[nodePoolAnnotationCurrentConfigVersion] = targetConfigVersionHash
+		// A management-only payload refresh deliberately keeps the userdata
+		// Secret and MachineSet target untouched. HCCO consumes this annotation,
+		// so updating it for a refreshed current token would incorrectly start
+		// an in-place upgrade without a new payload generation.
+		if !c.usesIgnitionPayload() || payloadGenerationAdvance {
+			targetConfigVersionHash := c.desiredConfigVersion()
+			machineSet.Annotations[nodePoolAnnotationTargetConfigVersion] = targetConfigVersionHash
+			if _, ok := machineSet.Annotations[nodePoolAnnotationCurrentConfigVersion]; !ok {
+				machineSet.Annotations[nodePoolAnnotationCurrentConfigVersion] = targetConfigVersionHash
+			}
 		}
 	}
 
@@ -723,8 +756,8 @@ func (c *CAPI) reconcileMachineDeploymentStatus(ctx context.Context, log logr.Lo
 	nodePool := c.nodePool
 	targetVersion := c.Version()
 	targetConfigHash := c.HashWithoutVersion()
-	targetConfigVersionHash := c.Hash()
-	targetRolloutConfigHash := c.RolloutHashWithoutVersion()
+	targetConfigVersionHash := c.desiredConfigVersion()
+	targetRolloutConfigHash := c.desiredRolloutConfig()
 
 	// List MachineSets owned by this MachineDeployment to verify rollout completion.
 	// MachineDeployment status counters can be stale after a template change because
@@ -1172,8 +1205,8 @@ func (c *CAPI) reconcileMachineSetStatus(log logr.Logger, machineTemplateCR clie
 	nodePool := c.nodePool
 	targetVersion := c.Version()
 	targetConfigHash := c.HashWithoutVersion()
-	targetConfigVersionHash := c.Hash()
-	targetRolloutConfigHash := c.RolloutHashWithoutVersion()
+	targetConfigVersionHash := c.desiredConfigVersion()
+	targetRolloutConfigHash := c.desiredRolloutConfig()
 
 	if nodePool.Annotations == nil {
 		nodePool.Annotations = make(map[string]string)

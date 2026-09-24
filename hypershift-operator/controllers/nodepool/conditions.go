@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	ignitionpayload "github.com/openshift/hypershift/hypershift-operator/controllers/ignitionpayload"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests/ignitionserver"
 	"github.com/openshift/hypershift/hypershift-operator/featuregate"
@@ -19,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -453,6 +456,19 @@ func (r *NodePoolReconciler) updatingConfigCondition(ctx context.Context, nodePo
 	}
 
 	targetConfigHash := token.RolloutHashWithoutVersion()
+	handoffReady, err := r.ignitionPayloadHandoffReady(ctx, manifests.HostedControlPlaneNamespace(hcluster.Namespace, hcluster.Name), hcluster.Name)
+	if err != nil {
+		return &ctrl.Result{}, err
+	}
+	if handoffReady {
+		if payload, err := r.currentIgnitionPayloadForNodePool(ctx, nodePool, hcluster); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return &ctrl.Result{}, err
+			}
+		} else if current, ok := ignitionpayload.CurrentForGeneration(payload); ok {
+			targetConfigHash = current.RolloutHash
+		}
+	}
 	currentConfigHash := nodePool.GetAnnotations()[nodePoolAnnotationCurrentRolloutConfig]
 	isUpdatingConfig := isUpdatingConfig(nodePool, targetConfigHash)
 	if isUpdatingConfig {
@@ -612,6 +628,30 @@ func (r *NodePoolReconciler) updatingVersionCondition(ctx context.Context, nodeP
 }
 
 func (r NodePoolReconciler) validGeneratedPayloadCondition(ctx context.Context, nodePool *hyperv1.NodePool, hcluster *hyperv1.HostedCluster) (*ctrl.Result, error) {
+	handoffReady, err := r.ignitionPayloadHandoffReady(ctx, manifests.HostedControlPlaneNamespace(hcluster.Namespace, hcluster.Name), hcluster.Name)
+	if err != nil {
+		return &ctrl.Result{}, err
+	}
+	if handoffReady {
+		payload, err := r.currentIgnitionPayloadForNodePool(ctx, nodePool, hcluster)
+		if err != nil {
+			return &ctrl.Result{}, err
+		}
+		generated := meta.FindStatusCondition(payload.Status.Conditions, ignitionv1alpha1.PayloadGeneratedCondition)
+		condition := hyperv1.NodePoolCondition{Type: hyperv1.NodePoolValidGeneratedPayloadConditionType, Status: corev1.ConditionFalse, Reason: hyperv1.NodePoolValidationFailedReason, Message: "Waiting for the current IgnitionPayload generation", ObservedGeneration: nodePool.Generation}
+		if generated != nil {
+			condition.Status = corev1.ConditionStatus(generated.Status)
+			condition.Reason = generated.Reason
+			condition.Message = generated.Message
+			if generated.ObservedGeneration != payload.Generation {
+				condition.Status = corev1.ConditionFalse
+				condition.Reason = "StalePayloadGeneration"
+				condition.Message = "Waiting for the current IgnitionPayload generation"
+			}
+		}
+		SetStatusCondition(&nodePool.Status.Conditions, condition)
+		return nil, nil
+	}
 	// Signal ignition payload generation
 	token, err := r.token(ctx, hcluster, nodePool)
 	if err != nil {
@@ -624,6 +664,17 @@ func (r NodePoolReconciler) validGeneratedPayloadCondition(ctx context.Context, 
 	}
 	SetStatusCondition(&nodePool.Status.Conditions, *condition)
 	return nil, nil
+}
+
+func (r NodePoolReconciler) currentIgnitionPayloadForNodePool(ctx context.Context, nodePool *hyperv1.NodePool, hcluster *hyperv1.HostedCluster) (*ignitionv1alpha1.IgnitionPayload, error) {
+	payload := &ignitionv1alpha1.IgnitionPayload{ObjectMeta: metav1.ObjectMeta{
+		Namespace: manifests.HostedControlPlaneNamespace(hcluster.Namespace, hcluster.Name),
+		Name:      ignitionPayloadNamePrefix + nodePool.Name,
+	}}
+	if err := r.Get(ctx, crclient.ObjectKeyFromObject(payload), payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (r NodePoolReconciler) reachedIgnitionEndpointCondition(ctx context.Context, nodePool *hyperv1.NodePool, hcluster *hyperv1.HostedCluster) (*ctrl.Result, error) {

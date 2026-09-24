@@ -50,3 +50,9 @@ func adaptService(cpContext component.WorkloadContext, svc *corev1.Service) erro
 
 	return nil
 }
+
+// AdaptService preserves the established IBM Route/NodePort allocation rules
+// when another controller adopts the ignition Service.
+func AdaptService(ctx component.ControlPlaneContext, svc *corev1.Service) error {
+	return adaptService(component.WorkloadContext{Context: ctx.Context, Client: ctx.Client, HCP: ctx.HCP}, svc)
+}

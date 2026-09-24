@@ -2,15 +2,18 @@ package karpenterignition
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	hyperkarpenterv1 "github.com/openshift/hypershift/api/karpenter/v1"
 	"github.com/openshift/hypershift/control-plane-operator/controllers/hostedcontrolplane/common"
+	ignitionpayloadcontroller "github.com/openshift/hypershift/hypershift-operator/controllers/ignitionpayload"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/nodepool"
 	haproxy "github.com/openshift/hypershift/hypershift-operator/controllers/nodepool/apiserver-haproxy"
 	"github.com/openshift/hypershift/hypershift-operator/featuregate"
@@ -22,6 +25,8 @@ import (
 	supportutil "github.com/openshift/hypershift/support/util"
 
 	configv1 "github.com/openshift/api/config/v1"
+
+	awskarpenterv1 "github.com/aws/karpenter-provider-aws/pkg/apis/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,7 +58,8 @@ const (
 	nodePoolAnnotationCurrentConfigVersion = "hypershift.openshift.io/nodePoolCurrentConfigVersion"
 	nodePoolAnnotationCurrentRolloutConfig = "hypershift.openshift.io/nodePoolCurrentRolloutConfig"
 
-	kubeletConfigFinalizer = "hypershift.openshift.io/karpenter-kubelet-config-finalizer"
+	kubeletConfigFinalizer   = "hypershift.openshift.io/karpenter-kubelet-config-finalizer"
+	payloadConsumerFinalizer = "hypershift.openshift.io/karpenter-ignition-payload-finalizer"
 )
 
 type KarpenterIgnitionReconciler struct {
@@ -77,10 +83,21 @@ func (r *KarpenterIgnitionReconciler) SetupWithManager(mgr ctrl.Manager, managem
 		Named("karpenter-ignition-controller").
 		// Watch OpenshiftEC2NodeClass in the guest cluster (main manager)
 		For(&hyperkarpenterv1.OpenshiftEC2NodeClass{}).
+		// The NodeClass controller writes this object only after it has selected
+		// and embedded the current userdata. Its update is the drain
+		// acknowledgement used to retire the previous payload generation.
+		Watches(&awskarpenterv1.EC2NodeClass{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(obj)}}
+		})).
 		// Watch HostedControlPlane in the management cluster
 		WatchesRawSource(source.Kind[client.Object](managementCluster.GetCache(), &hyperv1.HostedControlPlane{},
 			handler.EnqueueRequestsFromMapFunc(r.mapToOpenshiftEC2NodeClasses),
 			r.hcpPredicate())).
+		// The payload controller publishes status asynchronously. Watching its
+		// management-cluster objects is what advances a waiting NodeClass from
+		// request creation to userdata and the current-generation annotation.
+		WatchesRawSource(source.Kind[client.Object](managementCluster.GetCache(), &ignitionv1alpha1.IgnitionPayload{},
+			handler.EnqueueRequestsFromMapFunc(r.mapToOpenshiftEC2NodeClasses))).
 		WithOptions(controller.Options{
 			RateLimiter:             workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 10*time.Second),
 			MaxConcurrentReconciles: 10,
@@ -121,6 +138,13 @@ func (r *KarpenterIgnitionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Handle deletion: clean up management-cluster ConfigMap before finalizer is removed
 	if !openshiftEC2NodeClass.DeletionTimestamp.IsZero() {
 		return r.reconcileDeletedNodeClass(ctx, hcp, openshiftEC2NodeClass)
+	}
+	if !controllerutil.ContainsFinalizer(openshiftEC2NodeClass, payloadConsumerFinalizer) {
+		original := openshiftEC2NodeClass.DeepCopy()
+		controllerutil.AddFinalizer(openshiftEC2NodeClass, payloadConsumerFinalizer)
+		if err := r.GuestClient.Patch(ctx, openshiftEC2NodeClass, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add ignition payload finalizer: %w", err)
+		}
 	}
 
 	hostedCluster, err := hostedClusterFromHCP(hcp, r.IgnitionEndpoint)
@@ -228,6 +252,16 @@ func (r *KarpenterIgnitionReconciler) reconcileDeletedNodeClass(
 	openshiftEC2NodeClass *hyperkarpenterv1.OpenshiftEC2NodeClass,
 ) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
+	if controllerutil.ContainsFinalizer(openshiftEC2NodeClass, payloadConsumerFinalizer) {
+		if err := nodepool.DeleteKarpenterIgnitionPayload(ctx, r.ManagementClient, hcp.Namespace, openshiftEC2NodeClass.Name); err != nil {
+			return ctrl.Result{}, fmt.Errorf("delete ignition payload: %w", err)
+		}
+		original := openshiftEC2NodeClass.DeepCopy()
+		controllerutil.RemoveFinalizer(openshiftEC2NodeClass, payloadConsumerFinalizer)
+		if err := r.GuestClient.Patch(ctx, openshiftEC2NodeClass, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})); err != nil {
+			return ctrl.Result{}, fmt.Errorf("remove ignition payload finalizer: %w", err)
+		}
+	}
 
 	if !controllerutil.ContainsFinalizer(openshiftEC2NodeClass, kubeletConfigFinalizer) {
 		return ctrl.Result{}, nil
@@ -282,10 +316,6 @@ func (r *KarpenterIgnitionReconciler) reconcileNodeClassToken(
 		return fmt.Errorf("failed to create token: %w", err)
 	}
 
-	// Populate the in-memory NodePool annotations and status from the stored nodeclass
-	// state so that Token.isOutdated() can correctly detect config/version changes.
-	// On first reconcile (no stored state), leave annotations absent so isOutdated()
-	// returns true and creates the initial secrets.
 	currentConfigVersion := openshiftEC2NodeClass.GetAnnotations()[openshiftEC2NodeClassAnnotationCurrentConfigVersion]
 	currentRolloutConfig := openshiftEC2NodeClass.GetAnnotations()[openshiftEC2NodeClassAnnotationCurrentRolloutConfig]
 	if currentConfigVersion != "" {
@@ -298,18 +328,134 @@ func (r *KarpenterIgnitionReconciler) reconcileNodeClassToken(
 		}
 	}
 
-	if err := token.Reconcile(ctx); err != nil {
-		return fmt.Errorf("failed to reconcile token: %w", err)
+	payload, err := nodepool.ReconcileKarpenterIgnitionPayload(ctx, r.ManagementClient, cg, openshiftEC2NodeClass.Name)
+	if err != nil {
+		return fmt.Errorf("reconcile ignition payload: %w", err)
 	}
-
-	// Update the OpenshiftEC2NodeClass annotations if the config hash changed
-	if currentConfigVersion != cg.Hash() || currentRolloutConfig != cg.RolloutHashWithoutVersion() {
-		if err := r.updateConfigAnnotations(ctx, openshiftEC2NodeClass, cg.Hash(), cg.RolloutHashWithoutVersion()); err != nil {
+	handoffReady := hcp.Annotations[hyperv1.IgnitionPayloadHandoffReadyAnnotation] == "true"
+	current, generatedForCurrentSpec := ignitionpayloadcontroller.CurrentForGeneration(payload)
+	if !handoffReady && hcp.Annotations[hyperv1.DisableIgnitionServerAnnotation] == hyperv1.IgnitionServerHandoffAnnotationValue {
+		return nil
+	}
+	if !handoffReady {
+		// The initial N->N+1 handoff must keep existing NodeClasses provisionable
+		// until the per-HCP renderer publishes the first generation. This frozen
+		// compatibility write is never used again once status.current exists.
+		if err := token.Reconcile(ctx); err != nil {
 			return err
 		}
-		log.Info("Updated config version annotation", "oldVersion", currentConfigVersion, "newVersion", cg.Hash())
+		if currentConfigVersion != cg.Hash() || currentRolloutConfig != cg.RolloutHashWithoutVersion() {
+			return r.updateConfigAnnotations(ctx, openshiftEC2NodeClass, cg.Hash(), cg.RolloutHashWithoutVersion())
+		}
+		return nil
+	}
+	if !generatedForCurrentSpec {
+		// The release-coupled renderer no longer owns this HCP. Wait for the exact
+		// CR generation instead of publishing stale status.current or minting an
+		// unservable legacy token.
+		return nil
+	}
+	_, err = (&ignitionpayloadcontroller.SecretBackedStore{Client: r.ManagementClient, Namespace: payload.Namespace}).Get(ctx, current.Token)
+	if err != nil {
+		return fmt.Errorf("get rendered Karpenter payload: %w", err)
+	}
+	selectedLegacySecret, err := r.selectedLegacyTokenSecret(ctx, payload.Namespace, openshiftEC2NodeClass.Name, current.Token)
+	if err != nil {
+		return err
+	}
+	if selectedLegacySecret != "" {
+		if err := token.HydrateLegacyTokenSecret(ctx, selectedLegacySecret); err != nil {
+			return fmt.Errorf("prepare selected legacy Karpenter token Secret: %w", err)
+		}
+	}
+	currentUserData, err := token.ReconcileIgnitionPayloadUserData(ctx, payload)
+	if err != nil {
+		return fmt.Errorf("reconcile payload user data: %w", err)
+	}
+	// Karpenter treats each request as one-shot. A generation changes the
+	// userdata Secret name; the NodeClass controller selects the latest one.
+	if currentConfigVersion != current.ConfigHash || currentRolloutConfig != current.RolloutHash {
+		if err := r.updateConfigAnnotations(ctx, openshiftEC2NodeClass, current.ConfigHash, current.RolloutHash); err != nil {
+			return err
+		}
+		log.Info("Updated payload generation", "generation", current.Generation)
+	}
+	if err := r.retireDrainedPayloadGeneration(ctx, payload, openshiftEC2NodeClass, currentUserData, token.NodePoolName()); err != nil {
+		return fmt.Errorf("retire drained ignition payload generation: %w", err)
 	}
 
+	return nil
+}
+
+func (r *KarpenterIgnitionReconciler) selectedLegacyTokenSecret(ctx context.Context, namespace, nodeClassName, currentPayloadToken string) (string, error) {
+	nodeClass := &awskarpenterv1.EC2NodeClass{}
+	if err := r.GuestClient.Get(ctx, client.ObjectKey{Name: nodeClassName}, nodeClass); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get existing EC2NodeClass userdata: %w", err)
+	}
+	if nodeClass.Spec.UserData == nil || *nodeClass.Spec.UserData == "" {
+		return "", nil
+	}
+	var document struct {
+		Ignition struct {
+			Config struct {
+				Merge []struct {
+					HTTPHeaders []struct {
+						Name  string  `json:"name"`
+						Value *string `json:"value"`
+					} `json:"httpHeaders"`
+				} `json:"merge"`
+			} `json:"config"`
+		} `json:"ignition"`
+	}
+	if err := json.Unmarshal([]byte(*nodeClass.Spec.UserData), &document); err != nil {
+		return "", fmt.Errorf("decode existing EC2NodeClass userdata: %w", err)
+	}
+	tokenValue := ""
+	for _, merge := range document.Ignition.Config.Merge {
+		for _, header := range merge.HTTPHeaders {
+			if header.Name != "Authorization" || header.Value == nil || !strings.HasPrefix(*header.Value, "Bearer ") {
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(*header.Value, "Bearer "))
+			if err != nil {
+				return "", fmt.Errorf("decode selected legacy bearer: %w", err)
+			}
+			tokenValue = string(decoded)
+		}
+	}
+	if tokenValue == "" {
+		return "", nil
+	}
+	if tokenValue == currentPayloadToken {
+		return "", nil
+	}
+	secrets := &corev1.SecretList{}
+	if err := r.ManagementClient.List(ctx, secrets, client.InNamespace(namespace)); err != nil {
+		return "", err
+	}
+	for i := range secrets.Items {
+		secret := &secrets.Items[i]
+		if string(secret.Data[nodepool.TokenSecretTokenKey]) == tokenValue || string(secret.Data[nodepool.TokenSecretOldTokenKey]) == tokenValue {
+			return secret.Name, nil
+		}
+	}
+	return "", fmt.Errorf("legacy Secret selected by EC2NodeClass bearer was not found")
+}
+
+// retireDrainedPayloadGeneration deliberately retains Karpenter generations.
+// Updating EC2NodeClass userdata proves only what future launches use; it does
+// not prove that older or in-flight NodeClaims have disappeared. Until a stable
+// generation-to-NodeClaim association exists, delete-on-evict bounds storage
+// while conservatively keeping the immediately previous bearer servable.
+func (r *KarpenterIgnitionReconciler) retireDrainedPayloadGeneration(ctx context.Context, payload *ignitionv1alpha1.IgnitionPayload, openshiftEC2NodeClass *hyperkarpenterv1.OpenshiftEC2NodeClass, currentUserData *corev1.Secret, nodePoolName string) error {
+	_ = ctx
+	_ = payload
+	_ = openshiftEC2NodeClass
+	_ = currentUserData
+	_ = nodePoolName
 	return nil
 }
 

@@ -47,6 +47,8 @@ rules:
       - "hostedcontrolplanes"
       - "hostedcontrolplanes/finalizers"
       - "hostedcontrolplanes/status"
+      - "ignitionpayloads"
+      - "ignitionpayloads/finalizers"
     verbs:
       - "*"
   - apiGroups:

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	ignitionpayload "github.com/openshift/hypershift/hypershift-operator/controllers/ignitionpayload"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/manifests"
 	haproxy "github.com/openshift/hypershift/hypershift-operator/controllers/nodepool/apiserver-haproxy"
 	"github.com/openshift/hypershift/hypershift-operator/controllers/nodepool/instancetype"
@@ -34,6 +36,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -152,6 +155,7 @@ func (r *NodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.enqueueNodePoolsForCloudConfig), builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 			return obj.GetName() == "azure-cloud-config" || obj.GetName() == "openstack-cloud-config"
 		}))).
+		Watches(&ignitionv1alpha1.IgnitionPayload{}, handler.EnqueueRequestsFromMapFunc(r.enqueueNodePoolForIgnitionPayload)).
 		WithOptions(controller.Options{
 			RateLimiter:             workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 10*time.Second),
 			MaxConcurrentReconciles: 10,
@@ -177,6 +181,24 @@ func (r *NodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	r.recorder = mgr.GetEventRecorderFor("nodepool-controller")
 
+	return nil
+}
+
+func (r *NodePoolReconciler) enqueueNodePoolForIgnitionPayload(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !strings.HasPrefix(obj.GetName(), ignitionPayloadNamePrefix) {
+		return nil
+	}
+	nodePools := &hyperv1.NodePoolList{}
+	if err := r.List(ctx, nodePools); err != nil {
+		return nil
+	}
+	name := strings.TrimPrefix(obj.GetName(), ignitionPayloadNamePrefix)
+	for i := range nodePools.Items {
+		np := &nodePools.Items[i]
+		if np.Name == name && manifests.HostedControlPlaneNamespace(np.Namespace, np.Spec.ClusterName) == obj.GetNamespace() {
+			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(np)}}
+		}
+	}
 	return nil
 }
 
@@ -461,37 +483,75 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 		return ctrl.Result{RequeueAfter: duration}, nil
 	}
 
-	// 2. - Reconcile towards expected state of the world.
-	if err := token.Reconcile(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Seed the rollout config annotation on first reconcile after operator upgrade.
-	// This must happen before any rollout decision to prevent spurious rollouts.
-	if _, ok := nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig]; !ok {
-		if nodePool.Annotations == nil {
-			nodePool.Annotations = make(map[string]string)
-		}
-		nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = token.RolloutHashWithoutVersion()
-	}
-
-	// non automated infrastructure should not have any machine level cluster-api components
+	// Non-automated NodePools (including IBM UPI/None) have no CAPI rollout
+	// object from which to derive a generation-drained acknowledgement. Keep
+	// them entirely on the established legacy token path until a supported
+	// consumer contract exists; do not publish IgnitionPayload generations that
+	// can never be retired safely.
 	if !isAutomatedMachineManagement(nodePool) {
-		targetConfigHash := token.HashWithoutVersion()
-		targetPayloadConfigHash := token.Hash()
-		targetRolloutConfigHash := token.RolloutHashWithoutVersion()
+		if err := token.Reconcile(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
 		nodePool.Status.Version = releaseImage.Version()
 		if nodePool.Annotations == nil {
 			nodePool.Annotations = make(map[string]string)
 		}
-		if nodePool.Annotations[nodePoolAnnotationCurrentConfig] != targetConfigHash {
-			log.Info("Config update complete",
-				"previous", nodePool.Annotations[nodePoolAnnotationCurrentConfig], "new", targetConfigHash)
-			nodePool.Annotations[nodePoolAnnotationCurrentConfig] = targetConfigHash
-		}
-		nodePool.Annotations[nodePoolAnnotationCurrentConfigVersion] = targetPayloadConfigHash
-		nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = targetRolloutConfigHash
+		nodePool.Annotations[nodePoolAnnotationCurrentConfig] = token.HashWithoutVersion()
+		nodePool.Annotations[nodePoolAnnotationCurrentConfigVersion] = token.Hash()
+		nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = token.RolloutHashWithoutVersion()
 		return ctrl.Result{}, nil
+	}
+
+	// Project the new consumer-owned contract only after the pause gate. During
+	// the N->N+1 migration both paths coexist, but the new payload controller
+	// alone owns rendering state once selected.
+	payload, err := r.reconcileIgnitionPayload(ctx, nodePool, configGenerator, haproxyRawConfig)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconcile ignition payload: %w", err)
+	}
+
+	handoffReady, err := r.ignitionPayloadHandoffReady(ctx, controlPlaneNamespace, hcluster.Name)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("check ignition payload handoff readiness: %w", err)
+	}
+	_, generatedForCurrentSpec := ignitionpayload.CurrentForGeneration(payload)
+	usePayload := handoffReady && generatedForCurrentSpec
+	drainingLegacy := drainingLegacySecrets{}
+	if usePayload {
+		ready, draining, err := r.reconcileIgnitionPayloadConsumer(ctx, payload, token)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ready {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		drainingLegacy = draining
+		if reached := meta.FindStatusCondition(payload.Status.Conditions, ignitionv1alpha1.IgnitionReachedCondition); reached != nil {
+			SetStatusCondition(&nodePool.Status.Conditions, hyperv1.NodePoolCondition{
+				Type: hyperv1.NodePoolReachedIgnitionEndpoint, Status: corev1.ConditionStatus(reached.Status), Reason: reached.Reason,
+				Message: reached.Message, ObservedGeneration: nodePool.Generation,
+			})
+		}
+	} else if handoffReady || hcluster.Annotations[hyperv1.DisableIgnitionServerAnnotation] == hyperv1.IgnitionServerHandoffAnnotationValue {
+		// Once the serving handoff is durable, never mint a legacy token that the
+		// release-coupled renderer no longer owns. The same freeze starts as soon
+		// as handoff is requested, before CPO acknowledges and stops reconciling.
+		// Wait for this exact CR generation to render successfully.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	} else {
+		// A release-coupled CPO without the handoff capability remains the
+		// renderer and serving owner. Preserve the legacy path so existing OCP
+		// releases can still create and update NodePools until they advertise the
+		// acknowledged handoff protocol.
+		if err := token.Reconcile(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+		if _, ok := nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig]; !ok {
+			if nodePool.Annotations == nil {
+				nodePool.Annotations = make(map[string]string)
+			}
+			nodePool.Annotations[nodePoolAnnotationCurrentRolloutConfig] = token.RolloutHashWithoutVersion()
+		}
 	}
 
 	if err := capi.Reconcile(ctx); err != nil {
@@ -501,6 +561,11 @@ func (r *NodePoolReconciler) reconcile(ctx context.Context, hcluster *hyperv1.Ho
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if usePayload {
+		if err := r.retireIgnitionPayloadGeneration(ctx, payload, capi, drainingLegacy); err != nil {
+			return ctrl.Result{}, fmt.Errorf("retire ignition payload generation: %w", err)
+		}
 	}
 
 	// Set scale-from-zero annotations if provider is configured and platform is supported
@@ -598,6 +663,9 @@ func isArchAndPlatformSupported(nodePool *hyperv1.NodePool) bool {
 }
 
 func (r *NodePoolReconciler) delete(ctx context.Context, nodePool *hyperv1.NodePool, controlPlaneNamespace string) error {
+	if err := r.deleteIgnitionPayload(ctx, controlPlaneNamespace, ignitionPayloadNamePrefix+nodePool.Name); err != nil {
+		return fmt.Errorf("delete ignition payload: %w", err)
+	}
 	capi := &CAPI{
 		Token: &Token{
 			CreateOrUpdateProvider: r.CreateOrUpdateProvider,

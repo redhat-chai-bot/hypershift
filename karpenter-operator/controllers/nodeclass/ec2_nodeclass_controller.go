@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,7 +52,9 @@ import (
 )
 
 const (
-	finalizer = "hypershift.openshift.io/ec2-nodeclass-finalizer"
+	finalizer                                           = "hypershift.openshift.io/ec2-nodeclass-finalizer"
+	nodePoolCurrentConfigVersionAnnotation              = "hypershift.openshift.io/nodePoolCurrentConfigVersion"
+	openshiftEC2NodeClassCurrentConfigVersionAnnotation = "hypershift.openshift.io/nodeClassCurrentConfigVersion"
 
 	// DefaultRootVolumeSize is 120Gi because HCP NodePools provisioned with HCP CLI are set with 120Gi root volume by default.
 	// https://github.com/openshift/hypershift/blob/8be1d9c6f8f79106444e48f2b7d0069b942ba0d7/cmd/nodepool/aws/create.go#L30
@@ -644,6 +647,8 @@ func (r *EC2NodeClassReconciler) getUserDataSecret(ctx context.Context, openshif
 	}
 
 	expectedNodePoolName := karpenterutil.KarpenterNodePoolName(openshiftEC2NodeClass)
+	expectedConfigVersion := openshiftEC2NodeClass.GetAnnotations()[openshiftEC2NodeClassCurrentConfigVersionAnnotation]
+	candidates := make([]corev1.Secret, 0)
 
 	for _, secret := range secretList.Items {
 		annotations := secret.GetAnnotations()
@@ -656,8 +661,32 @@ func (r *EC2NodeClassReconciler) getUserDataSecret(ctx context.Context, openshif
 		}
 		nodePoolAnnotation := util.ParseNamespacedName(annotations[hyperkarpenterv1.TokenSecretNodePoolAnnotation])
 		if nodePoolAnnotation.Name == expectedNodePoolName {
-			return &secret, nil
+			candidates = append(candidates, secret)
 		}
+	}
+	// List order is not a lifecycle contract. Prefer the exact config selected
+	// by the ignition-payload consumer, then use a stable name order only for
+	// pre-payload legacy Secrets that lack the selection annotation.
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Name > candidates[j].Name })
+	if expectedConfigVersion != "" {
+		for i := range candidates {
+			if candidates[i].Annotations[nodePoolCurrentConfigVersionAnnotation] == expectedConfigVersion {
+				return &candidates[i], nil
+			}
+		}
+		legacyOnly := len(candidates) > 0
+		for i := range candidates {
+			if candidates[i].Annotations[nodePoolCurrentConfigVersionAnnotation] != "" {
+				legacyOnly = false
+				break
+			}
+		}
+		if !legacyOnly {
+			return nil, fmt.Errorf("%w: no user data Secret for current config version %q", errKarpenterUserDataSecretNotFound, expectedConfigVersion)
+		}
+	}
+	if len(candidates) > 0 {
+		return &candidates[0], nil
 	}
 
 	return nil, fmt.Errorf("%w: expectedNodePoolName: %s, nodeclassName: %s", errKarpenterUserDataSecretNotFound, expectedNodePoolName, openshiftEC2NodeClass.Name)

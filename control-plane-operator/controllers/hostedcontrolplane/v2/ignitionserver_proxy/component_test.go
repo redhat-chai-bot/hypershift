@@ -112,6 +112,22 @@ func TestIsRequestServing(t *testing.T) {
 	g.Expect(proxy.IsRequestServing()).To(BeTrue())
 }
 
+func TestPreserveOnDisable(t *testing.T) {
+	proxy := &ignitionServerProxy{}
+	hcp := &hyperv1.HostedControlPlane{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		hyperv1.DisableIgnitionServerAnnotation: hyperv1.IgnitionServerHandoffAnnotationValue,
+	}}}
+	if !proxy.PreserveOnDisable(component.WorkloadContext{HCP: hcp}) {
+		t.Fatal("expected handoff resources to be preserved")
+	}
+}
+
+func TestDisableAcknowledgementAnnotation(t *testing.T) {
+	if got := (&ignitionServerProxy{}).DisableAcknowledgementAnnotation(); got != hyperv1.IgnitionServerProxyHandoffAcknowledgedAnnotation {
+		t.Fatalf("unexpected acknowledgement annotation %q", got)
+	}
+}
+
 func TestMultiZoneSpread(t *testing.T) {
 	t.Parallel()
 

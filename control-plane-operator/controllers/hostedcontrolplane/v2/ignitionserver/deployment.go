@@ -84,3 +84,28 @@ func (ign *ignitionServer) adaptDeployment(cpContext component.WorkloadContext, 
 
 	return nil
 }
+
+// AdaptDeployment applies the same serving configuration used by the CPO
+// component to an ignition-server Deployment owned by another reconciler.  The
+// payload-controller migration deliberately uses this rather than maintaining a
+// second copy of TLS, proxy, and trust-bundle handling. The serving-only binary
+// does not accept the legacy renderer's registry or platform flags.
+func AdaptDeployment(hcp *hyperv1.HostedControlPlane, deployment *appsv1.Deployment) error {
+	tlsArgs, err := config.TLSArgs(hcp.Spec.Configuration.GetTLSSecurityProfile())
+	if err != nil {
+		return err
+	}
+	podspec.UpdateContainer(ComponentName, deployment.Spec.Template.Spec.Containers, func(c *corev1.Container) {
+		c.Args = append(c.Args, tlsArgs...)
+		proxy.SetEnvVars(&c.Env)
+	})
+	if hcp.Spec.AdditionalTrustBundle != nil {
+		podspec.DeploymentAddTrustBundleVolume(hcp.Spec.AdditionalTrustBundle, deployment)
+	}
+	if hcp.Spec.Platform.Type == hyperv1.IBMCloudPlatform {
+		podspec.UpdateVolume("serving-cert", deployment.Spec.Template.Spec.Volumes, func(v *corev1.Volume) {
+			v.Secret.SecretName = ignitionserver.IgnitionServingCertSecret("").Name
+		})
+	}
+	return nil
+}

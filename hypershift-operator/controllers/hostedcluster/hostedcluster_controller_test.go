@@ -2215,8 +2215,14 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 			watchedResources := sets.New[string]()
 			for _, resource := range r.managedResources() {
 				resourceType := fmt.Sprintf("%T", resource)
+				if resourceType == "*v1.Service" || resourceType == "*v1.Route" {
+					// The first handoff reconciliation only persists the CPO disable
+					// request. Shared serving resources are intentionally untouched
+					// until CPO acknowledgement arrives on a later reconciliation.
+					continue
+				}
 				switch resourceType {
-				case "*v1.Endpoints", "*v1.Job", "*v1.StatefulSet", "*v1beta1.NodePool", "*v1beta1.AWSEndpointService", "*v1.Service", "*v1.Route":
+				case "*v1.Endpoints", "*v1.Job", "*v1.StatefulSet", "*v1beta1.NodePool", "*v1beta1.AWSEndpointService":
 					// We watch Endpoints for changes to the kubernetes Endpoint in the default namespace
 					// but never create an Endpoints resource
 
@@ -2228,8 +2234,6 @@ func TestHostedClusterWatchesEverythingItCreates(t *testing.T) {
 
 					// We watch AWSEndpointServices to propagate conditions to the HostedCluster
 
-					// "*v1.Service", "*v1.Route" are not in the main controller path after this PR:
-					// https://github.com/openshift/hypershift/pull/6133
 					continue
 				}
 				watchedResources.Insert(resourceType)

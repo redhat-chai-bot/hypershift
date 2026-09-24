@@ -266,7 +266,7 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		{
-			name: "When the nodepool upgrade strategy is replace, it should not contain the machine payload in the token secret",
+			name: "When the nodepool upgrade strategy is replace, it should persist the exact machine payload for handoff",
 			secret: &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test",
@@ -300,8 +300,10 @@ func TestReconcile(t *testing.T) {
 				err = r.Client.Get(ctx, client.ObjectKeyFromObject(secret), freshSecret)
 				g.Expect(err).ToNot(HaveOccurred())
 
-				// Validate that the payload was not stored in the token secret
-				g.Expect(freshSecret.Data[TokenSecretPayloadKey]).To(BeEmpty())
+				// The exact legacy payload is persisted for a no-gap serving handoff.
+				persisted, err := util.DecodeAndDecompress(freshSecret.Data[TokenSecretPayloadKey])
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(persisted.String()).To(Equal(fakePayload))
 			},
 		},
 	}

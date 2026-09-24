@@ -22,6 +22,7 @@ import (
 
 	v1alpha1 "github.com/openshift/hypershift/api/auditlogpersistence/v1alpha1"
 	certificatesv1alpha1 "github.com/openshift/hypershift/api/certificates/v1alpha1"
+	hypershiftv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	v1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	v1 "github.com/openshift/hypershift/api/karpenter/v1"
 	schedulingv1alpha1 "github.com/openshift/hypershift/api/scheduling/v1alpha1"
@@ -64,6 +65,10 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Certificates().V1alpha1().CertificateRevocationRequests().Informer()}, nil
 	case certificatesv1alpha1.SchemeGroupVersion.WithResource("certificatesigningrequestapprovals"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Certificates().V1alpha1().CertificateSigningRequestApprovals().Informer()}, nil
+
+		// Group=hypershift.openshift.io, Version=v1alpha1
+	case hypershiftv1alpha1.SchemeGroupVersion.WithResource("ignitionpayloads"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Hypershift().V1alpha1().IgnitionPayloads().Informer()}, nil
 
 		// Group=hypershift.openshift.io, Version=v1beta1
 	case v1beta1.SchemeGroupVersion.WithResource("azureprivatelinkservices"):

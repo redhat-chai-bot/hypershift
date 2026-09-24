@@ -11,11 +11,58 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// ApplyDeploymentDefaults applies the same defaults the control-plane component
+// reconciler uses to a Deployment managed by another reconciler. current may be
+// nil for a new Deployment. When adopting an existing Deployment its selector
+// is retained because apps/v1 Deployment selectors are immutable, and its
+// container resource requirements are preserved in the same way as a normal
+// component reconciliation.
+func ApplyDeploymentDefaults(cpContext ControlPlaneContext, name string, options ComponentOptions, current, desired *appsv1.Deployment) error {
+	existingResources := map[string]corev1.ResourceRequirements{}
+	if current != nil {
+		for _, container := range current.Spec.Template.Spec.Containers {
+			existingResources[container.Name] = container.Resources
+		}
+		if current.Spec.Selector != nil {
+			desired.Spec.Selector = current.Spec.Selector.DeepCopy()
+			if desired.Spec.Template.Labels == nil {
+				desired.Spec.Template.Labels = map[string]string{}
+			}
+			for key := range current.Spec.Selector.MatchLabels {
+				desired.Spec.Template.Labels[key] = current.Spec.Template.Labels[key]
+			}
+			for _, expression := range current.Spec.Selector.MatchExpressions {
+				if value, exists := current.Spec.Template.Labels[expression.Key]; exists {
+					desired.Spec.Template.Labels[expression.Key] = value
+				}
+			}
+		}
+	}
+
+	workload := &controlPlaneWorkload[*appsv1.Deployment]{
+		ComponentOptions: options,
+		name:             name,
+		workloadProvider: &deploymentProvider{},
+	}
+	if err := workload.setDefaultOptions(cpContext, desired, existingResources); err != nil {
+		return err
+	}
+	selector, err := metav1.LabelSelectorAsSelector(desired.Spec.Selector)
+	if err != nil {
+		return fmt.Errorf("invalid Deployment selector: %w", err)
+	}
+	if !selector.Matches(labels.Set(desired.Spec.Template.Labels)) {
+		return fmt.Errorf("deployment pod template labels do not match immutable selector")
+	}
+	return nil
+}
 
 type WorkloadProvider[T client.Object] interface {
 	// NewObject returns a new object of the generic type. This is useful when getting/deleting the workload.

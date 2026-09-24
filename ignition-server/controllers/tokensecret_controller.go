@@ -42,6 +42,8 @@ const (
 	// TokenSecretOSStreamKey is intentionally duplicated from nodepool/token.go
 	// to avoid a dependency from ignition-server → hypershift-operator.
 	TokenSecretOSStreamKey         = "os-stream"
+	legacyTokenLabel               = "hypershift.openshift.io/ignition-legacy-token"
+	legacyOldTokenLabel            = "hypershift.openshift.io/ignition-legacy-old-token"
 	TokenSecretAnnotation          = "hypershift.openshift.io/ignition-config"
 	TokenSecretNodePoolUpgradeType = "hypershift.openshift.io/node-pool-upgrade-type"
 	TokenSecretTokenGenerationTime = "hypershift.openshift.io/last-token-generation-time"
@@ -247,6 +249,10 @@ func (r *TokenSecretReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					return ctrl.Result{}, err
 				}
 				TokenRotationTotal.Inc()
+				return ctrl.Result{RequeueAfter: ttl / 2}, nil
+			}
+			if err := r.persistLegacyPayload(ctx, tokenSecret, value.Payload); err != nil {
+				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: ttl/2 - durationDeref(timeLived)}, nil
 		}
@@ -258,6 +264,9 @@ func (r *TokenSecretReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if value, ok := r.PayloadStore.Get(string(oldToken)); ok {
 			if value.CloudConfigHash == cloudConfigHash {
 				r.PayloadStore.Set(token, value)
+				if err := r.persistLegacyPayload(ctx, tokenSecret, value.Payload); err != nil {
+					return ctrl.Result{}, err
+				}
 				return ctrl.Result{RequeueAfter: ttl/2 - durationDeref(timeLived)}, nil
 			}
 			log.Info("Cloud config hash changed, invalidating old token cached payload")
@@ -332,29 +341,39 @@ func (r *TokenSecretReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.PayloadStore.Set(string(oldToken), cacheValue)
 	}
 
-	patch := tokenSecret.DeepCopy()
-
-	// In inplace upgrade, compress and encode payload for inplace upgrader to consume.
-	if string(hyperv1.UpgradeTypeInPlace) == tokenSecret.Annotations[TokenSecretNodePoolUpgradeType] {
-		compressedAndEncodedPayload, err := util.CompressAndEncode(payload)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to compress and encode payload: %w", err)
-		}
-		patch.Data[TokenSecretPayloadKey] = compressedAndEncodedPayload.Bytes()
+	if err := r.persistLegacyPayload(ctx, tokenSecret, payload); err != nil {
+		return ctrl.Result{}, err
 	}
-	// In replace upgrade, ensure the payload is not stored in the secret.
-	if string(hyperv1.UpgradeTypeReplace) == tokenSecret.Annotations[TokenSecretNodePoolUpgradeType] {
-		delete(patch.Data, TokenSecretPayloadKey)
+
+	return ctrl.Result{RequeueAfter: ttl/2 - durationDeref(timeLived)}, nil
+}
+
+func (r *TokenSecretReconciler) persistLegacyPayload(ctx context.Context, tokenSecret *corev1.Secret, payload []byte) error {
+	patch := tokenSecret.DeepCopy()
+	compressedAndEncodedPayload, err := util.CompressAndEncode(payload)
+	if err != nil {
+		return fmt.Errorf("failed to compress and encode payload: %w", err)
+	}
+	patch.Data[TokenSecretPayloadKey] = compressedAndEncodedPayload.Bytes()
+	if patch.Labels == nil {
+		patch.Labels = map[string]string{}
+	}
+	if token := string(patch.Data[TokenSecretTokenKey]); token != "" {
+		patch.Labels[legacyTokenLabel] = token
+	}
+	if oldToken := string(patch.Data[TokenSecretOldTokenKey]); oldToken != "" {
+		patch.Labels[legacyOldTokenLabel] = oldToken
+	} else {
+		delete(patch.Labels, legacyOldTokenLabel)
 	}
 
 	patch.Data[TokenSecretReasonKey] = []byte(hyperv1.AsExpectedReason)
 	patch.Data[TokenSecretMessageKey] = []byte("Payload generated successfully")
 
 	if err := r.Client.Patch(ctx, patch, client.MergeFrom(tokenSecret)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to patch tokenSecret with payload content: %w", err)
+		return fmt.Errorf("failed to patch tokenSecret with payload content: %w", err)
 	}
-
-	return ctrl.Result{RequeueAfter: ttl/2 - durationDeref(timeLived)}, nil
+	return nil
 }
 
 func hasSameReasonAndMessage(tokenSecret *corev1.Secret, reason string, message error) bool {

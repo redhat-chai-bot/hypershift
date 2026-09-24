@@ -23,6 +23,7 @@ import (
 
 	auditlogpersistencev1alpha1 "github.com/openshift/hypershift/client/clientset/clientset/typed/auditlogpersistence/v1alpha1"
 	certificatesv1alpha1 "github.com/openshift/hypershift/client/clientset/clientset/typed/certificates/v1alpha1"
+	hypershiftv1alpha1 "github.com/openshift/hypershift/client/clientset/clientset/typed/hypershift/v1alpha1"
 	hypershiftv1beta1 "github.com/openshift/hypershift/client/clientset/clientset/typed/hypershift/v1beta1"
 	karpenterv1 "github.com/openshift/hypershift/client/clientset/clientset/typed/karpenter/v1"
 	schedulingv1alpha1 "github.com/openshift/hypershift/client/clientset/clientset/typed/scheduling/v1alpha1"
@@ -35,6 +36,7 @@ type Interface interface {
 	Discovery() discovery.DiscoveryInterface
 	AuditlogpersistenceV1alpha1() auditlogpersistencev1alpha1.AuditlogpersistenceV1alpha1Interface
 	CertificatesV1alpha1() certificatesv1alpha1.CertificatesV1alpha1Interface
+	HypershiftV1alpha1() hypershiftv1alpha1.HypershiftV1alpha1Interface
 	HypershiftV1beta1() hypershiftv1beta1.HypershiftV1beta1Interface
 	KarpenterV1() karpenterv1.KarpenterV1Interface
 	SchedulingV1alpha1() schedulingv1alpha1.SchedulingV1alpha1Interface
@@ -45,6 +47,7 @@ type Clientset struct {
 	*discovery.DiscoveryClient
 	auditlogpersistenceV1alpha1 *auditlogpersistencev1alpha1.AuditlogpersistenceV1alpha1Client
 	certificatesV1alpha1        *certificatesv1alpha1.CertificatesV1alpha1Client
+	hypershiftV1alpha1          *hypershiftv1alpha1.HypershiftV1alpha1Client
 	hypershiftV1beta1           *hypershiftv1beta1.HypershiftV1beta1Client
 	karpenterV1                 *karpenterv1.KarpenterV1Client
 	schedulingV1alpha1          *schedulingv1alpha1.SchedulingV1alpha1Client
@@ -58,6 +61,11 @@ func (c *Clientset) AuditlogpersistenceV1alpha1() auditlogpersistencev1alpha1.Au
 // CertificatesV1alpha1 retrieves the CertificatesV1alpha1Client
 func (c *Clientset) CertificatesV1alpha1() certificatesv1alpha1.CertificatesV1alpha1Interface {
 	return c.certificatesV1alpha1
+}
+
+// HypershiftV1alpha1 retrieves the HypershiftV1alpha1Client
+func (c *Clientset) HypershiftV1alpha1() hypershiftv1alpha1.HypershiftV1alpha1Interface {
+	return c.hypershiftV1alpha1
 }
 
 // HypershiftV1beta1 retrieves the HypershiftV1beta1Client
@@ -127,6 +135,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 	if err != nil {
 		return nil, err
 	}
+	cs.hypershiftV1alpha1, err = hypershiftv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 	cs.hypershiftV1beta1, err = hypershiftv1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
@@ -162,6 +174,7 @@ func New(c rest.Interface) *Clientset {
 	var cs Clientset
 	cs.auditlogpersistenceV1alpha1 = auditlogpersistencev1alpha1.New(c)
 	cs.certificatesV1alpha1 = certificatesv1alpha1.New(c)
+	cs.hypershiftV1alpha1 = hypershiftv1alpha1.New(c)
 	cs.hypershiftV1beta1 = hypershiftv1beta1.New(c)
 	cs.karpenterV1 = karpenterv1.New(c)
 	cs.schedulingV1alpha1 = schedulingv1alpha1.New(c)

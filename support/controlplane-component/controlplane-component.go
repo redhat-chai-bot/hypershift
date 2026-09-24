@@ -125,6 +125,14 @@ type ComponentOptions interface {
 	NeedsManagementKASAccess() bool
 }
 
+// preserveOnDisable is implemented by components whose resources are adopted
+// by another controller during a handoff. It is deliberately optional so the
+// default for every other component remains delete-on-disable.
+type preserveOnDisable interface {
+	PreserveOnDisable(cpContext WorkloadContext) bool
+	DisableAcknowledgementAnnotation() string
+}
+
 // TODO: add unit test
 type controlPlaneWorkload[T client.Object] struct {
 	ComponentOptions
@@ -185,6 +193,18 @@ func (c *controlPlaneWorkload[T]) Reconcile(cpContext ControlPlaneContext) error
 			return err
 		}
 		if !isEnabled {
+			if handoff, ok := c.ComponentOptions.(preserveOnDisable); ok && handoff.PreserveOnDisable(workloadContext) {
+				annotation := handoff.DisableAcknowledgementAnnotation()
+				if annotation == "" || cpContext.HCP.Annotations[annotation] == "true" {
+					return nil
+				}
+				before := cpContext.HCP.DeepCopy()
+				if cpContext.HCP.Annotations == nil {
+					cpContext.HCP.Annotations = map[string]string{}
+				}
+				cpContext.HCP.Annotations[annotation] = "true"
+				return cpContext.Client.Patch(cpContext, cpContext.HCP, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+			}
 			return c.delete(cpContext)
 		}
 	}

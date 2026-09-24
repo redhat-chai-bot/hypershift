@@ -7,12 +7,14 @@ COPY --chown=default . .
 
 RUN make hypershift \
   && make hypershift-operator \
-  && make karpenter-operator
+  && make karpenter-operator \
+  && make ignition-server
 
 FROM registry.redhat.io/ubi9/ubi-minimal-pqc:latest
 COPY --from=builder /hypershift/bin/hypershift \
   /hypershift/bin/hypershift-operator \
   /hypershift/bin/karpenter-operator \
+  /hypershift/bin/ignition-server \
   /usr/bin/
 
 ENTRYPOINT ["/usr/bin/hypershift"]

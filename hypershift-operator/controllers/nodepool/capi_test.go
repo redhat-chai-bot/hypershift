@@ -2591,7 +2591,9 @@ func TestReconcileSelectorDropsStaleLabels(t *testing.T) {
 		Spec:       hyperv1.HostedClusterSpec{Platform: hyperv1.PlatformSpec{Type: hyperv1.KubevirtPlatform}},
 	}
 
-	newCAPI := func(g *WithT) *CAPI {
+	newCAPI := func() *CAPI {
+		nodePool := nodePool.DeepCopy()
+		hostedCluster := hostedCluster.DeepCopy()
 		c := fake.NewClientBuilder().
 			WithScheme(api.Scheme).
 			WithObjects(nodePool, hostedCluster).
@@ -2635,7 +2637,7 @@ func TestReconcileSelectorDropsStaleLabels(t *testing.T) {
 	t.Run("MachineDeployment", func(t *testing.T) {
 		t.Parallel()
 		g := NewWithT(t)
-		capi := newCAPI(g)
+		capi := newCAPI()
 
 		md := &capiv1.MachineDeployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-nodepool", Namespace: controlPlaneNamespace},
@@ -2654,7 +2656,7 @@ func TestReconcileSelectorDropsStaleLabels(t *testing.T) {
 	t.Run("MachineSet", func(t *testing.T) {
 		t.Parallel()
 		g := NewWithT(t)
-		capi := newCAPI(g)
+		capi := newCAPI()
 
 		ms := &capiv1.MachineSet{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-nodepool", Namespace: controlPlaneNamespace},

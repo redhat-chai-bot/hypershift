@@ -60,6 +60,9 @@ type LocalIgnitionProvider struct {
 	ReleaseProvider releaseinfo.ProviderWithOpenShiftImageRegistryOverrides
 	CloudProvider   hyperv1.PlatformType
 	Namespace       string
+	// PullSecretName selects the namespace-local release pull secret. Empty
+	// preserves the historical pull-secret default for legacy TokenSecrets.
+	PullSecretName string
 
 	// WorkDir is the base working directory for contents extracted from a
 	// release payload. Usually this would map to a volume mount.
@@ -187,7 +190,10 @@ func (p *LocalIgnitionProvider) getOrGenerateMCSCert() (certPEM []byte, keyPEM [
 }
 
 const (
-	pullSecretName            = "pull-secret"
+	defaultPullSecretName = "pull-secret"
+	// pullSecretName remains as a compatibility alias for callers and tests that
+	// exercise the legacy default-secret path.
+	pullSecretName            = defaultPullSecretName
 	additionalTrustBundleName = "user-ca-bundle"
 	managedTrustBundleName    = "trusted-ca-bundle-managed"
 )
@@ -203,7 +209,11 @@ type payloadDirs struct {
 
 func (p *LocalIgnitionProvider) fetchPullSecret(ctx context.Context) ([]byte, error) {
 	secret := &corev1.Secret{}
-	if err := p.Client.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: pullSecretName}, secret); err != nil {
+	name := p.PullSecretName
+	if name == "" {
+		name = defaultPullSecretName
+	}
+	if err := p.Client.Get(ctx, client.ObjectKey{Namespace: p.Namespace, Name: name}, secret); err != nil {
 		return nil, fmt.Errorf("failed to get pull secret: %w", err)
 	}
 	data, exists := secret.Data[corev1.DockerConfigJsonKey]

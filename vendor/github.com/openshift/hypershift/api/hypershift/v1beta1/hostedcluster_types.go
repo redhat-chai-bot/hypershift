@@ -416,6 +416,20 @@ const (
 
 	// DisableIgnitionServerAnnotation controls skipping of the ignition server deployment.
 	DisableIgnitionServerAnnotation = "hypershift.openshift.io/disable-ignition-server"
+	// IgnitionServerHandoffAnnotationValue identifies a readiness-gated handoff
+	// from the release-coupled CPO ignition component to the HyperShift operator.
+	// CPO must stop reconciling without deleting the already-adopted resources.
+	IgnitionServerHandoffAnnotationValue = "hypershift-operator-payload"
+	// IgnitionServerHandoffAcknowledgedAnnotation is written by the CPO after
+	// its ignition-server component has stopped reconciling shared resources.
+	IgnitionServerHandoffAcknowledgedAnnotation = "hypershift.openshift.io/ignition-server-handoff-acknowledged"
+	// IgnitionPayloadHandoffReadyAnnotation is written to the HostedControlPlane
+	// after every serving endpoint belongs to the fully rolled out payload server.
+	// Consumers must not publish CR-backed tokens before this durable gate is true.
+	IgnitionPayloadHandoffReadyAnnotation = "hypershift.openshift.io/ignition-payload-handoff-ready"
+	// IgnitionServerProxyHandoffAcknowledgedAnnotation is the equivalent
+	// acknowledgement for the public ignition proxy component.
+	IgnitionServerProxyHandoffAcknowledgedAnnotation = "hypershift.openshift.io/ignition-server-proxy-handoff-acknowledged"
 
 	// KubeAPIServerGoAwayChance allows the --goaway-chance parameter of the kube-apiserver to be overridden from its default of 0
 	KubeAPIServerGoAwayChance = "hypershift.openshift.io/kube-apiserver-goaway-chance"

@@ -16,6 +16,12 @@ type ignitionServerProxy struct {
 	defaultIngressDomain string
 }
 
+// DeploymentOptions exposes the component's topology and availability
+// classification to reconcilers adopting its Deployment.
+func DeploymentOptions() component.ComponentOptions {
+	return &ignitionServerProxy{}
+}
+
 // IsRequestServing implements controlplanecomponent.ComponentOptions.
 func (r *ignitionServerProxy) IsRequestServing() bool {
 	return true
@@ -29,6 +35,15 @@ func (r *ignitionServerProxy) MultiZoneSpread() bool {
 // NeedsManagementKASAccess implements controlplanecomponent.ComponentOptions.
 func (r *ignitionServerProxy) NeedsManagementKASAccess() bool {
 	return false
+}
+
+// PreserveOnDisable keeps the adopted proxy resources during the HO handoff.
+func (r *ignitionServerProxy) PreserveOnDisable(cpContext component.WorkloadContext) bool {
+	return cpContext.HCP.Annotations[hyperv1.DisableIgnitionServerAnnotation] == hyperv1.IgnitionServerHandoffAnnotationValue
+}
+
+func (r *ignitionServerProxy) DisableAcknowledgementAnnotation() string {
+	return hyperv1.IgnitionServerProxyHandoffAcknowledgedAnnotation
 }
 
 func NewComponent(defaultIngressDomain string) component.ControlPlaneComponent {

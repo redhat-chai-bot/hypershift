@@ -8,6 +8,7 @@ COPY . .
 RUN make hypershift \
   && make hypershift-no-cgo \
   && make hypershift-operator \
+  && make ignition-server \
   && make product-cli \
   && make karpenter-operator
 
@@ -16,6 +17,7 @@ COPY --from=builder /hypershift/bin/hypershift \
                     /hypershift/bin/hypershift-no-cgo \
                     /hypershift/bin/hcp \
                     /hypershift/bin/hypershift-operator \
+                    /hypershift/bin/ignition-server \
                     /hypershift/bin/karpenter-operator \
      /usr/bin/
 
@@ -34,3 +36,4 @@ LABEL io.openshift.hypershift.restricted-psa=true
 LABEL io.openshift.hypershift.control-plane-pki-operator-signs-csrs=true
 LABEL io.openshift.hypershift.hosted-cluster-config-operator-reports-node-count=true
 LABEL io.openshift.hypershift.control-plane-operator.v2-isdefault=true
+LABEL io.openshift.hypershift.control-plane-operator-supports-ignition-server-handoff=true

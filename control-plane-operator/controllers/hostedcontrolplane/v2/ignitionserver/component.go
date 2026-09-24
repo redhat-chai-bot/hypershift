@@ -17,6 +17,12 @@ type ignitionServer struct {
 	defaultIngressDomain string
 }
 
+// DeploymentOptions exposes the component's topology and availability
+// classification to reconcilers adopting its Deployment.
+func DeploymentOptions() component.ComponentOptions {
+	return &ignitionServer{}
+}
+
 // IsRequestServing implements controlplanecomponent.ComponentOptions.
 func (r *ignitionServer) IsRequestServing() bool {
 	return false
@@ -30,6 +36,17 @@ func (r *ignitionServer) MultiZoneSpread() bool {
 // NeedsManagementKASAccess implements controlplanecomponent.ComponentOptions.
 func (r *ignitionServer) NeedsManagementKASAccess() bool {
 	return true
+}
+
+// PreserveOnDisable keeps resources that the HyperShift operator has adopted
+// after its replacement serving tier is ready. Other annotation values retain
+// the historical delete-on-disable behavior.
+func (r *ignitionServer) PreserveOnDisable(cpContext component.WorkloadContext) bool {
+	return cpContext.HCP.Annotations[hyperv1.DisableIgnitionServerAnnotation] == hyperv1.IgnitionServerHandoffAnnotationValue
+}
+
+func (r *ignitionServer) DisableAcknowledgementAnnotation() string {
+	return hyperv1.IgnitionServerHandoffAcknowledgedAnnotation
 }
 
 func NewComponent(releaseProvider releaseinfo.ProviderWithOpenShiftImageRegistryOverrides, defaultIngressDomain string) component.ControlPlaneComponent {

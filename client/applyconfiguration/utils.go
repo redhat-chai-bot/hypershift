@@ -20,11 +20,13 @@ package applyconfiguration
 import (
 	v1alpha1 "github.com/openshift/hypershift/api/auditlogpersistence/v1alpha1"
 	certificatesv1alpha1 "github.com/openshift/hypershift/api/certificates/v1alpha1"
+	hypershiftv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	v1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	v1 "github.com/openshift/hypershift/api/karpenter/v1"
 	schedulingv1alpha1 "github.com/openshift/hypershift/api/scheduling/v1alpha1"
 	auditlogpersistencev1alpha1 "github.com/openshift/hypershift/client/applyconfiguration/auditlogpersistence/v1alpha1"
 	applyconfigurationcertificatesv1alpha1 "github.com/openshift/hypershift/client/applyconfiguration/certificates/v1alpha1"
+	applyconfigurationhypershiftv1alpha1 "github.com/openshift/hypershift/client/applyconfiguration/hypershift/v1alpha1"
 	hypershiftv1beta1 "github.com/openshift/hypershift/client/applyconfiguration/hypershift/v1beta1"
 	internal "github.com/openshift/hypershift/client/applyconfiguration/internal"
 	karpenterv1 "github.com/openshift/hypershift/client/applyconfiguration/karpenter/v1"
@@ -61,6 +63,18 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationcertificatesv1alpha1.CertificateRevocationRequestStatusApplyConfiguration{}
 	case certificatesv1alpha1.SchemeGroupVersion.WithKind("CertificateSigningRequestApproval"):
 		return &applyconfigurationcertificatesv1alpha1.CertificateSigningRequestApprovalApplyConfiguration{}
+
+		// Group=hypershift.openshift.io, Version=v1alpha1
+	case hypershiftv1alpha1.SchemeGroupVersion.WithKind("IgnitionPayload"):
+		return &applyconfigurationhypershiftv1alpha1.IgnitionPayloadApplyConfiguration{}
+	case hypershiftv1alpha1.SchemeGroupVersion.WithKind("IgnitionPayloadRendererInputs"):
+		return &applyconfigurationhypershiftv1alpha1.IgnitionPayloadRendererInputsApplyConfiguration{}
+	case hypershiftv1alpha1.SchemeGroupVersion.WithKind("IgnitionPayloadSpec"):
+		return &applyconfigurationhypershiftv1alpha1.IgnitionPayloadSpecApplyConfiguration{}
+	case hypershiftv1alpha1.SchemeGroupVersion.WithKind("IgnitionPayloadStatus"):
+		return &applyconfigurationhypershiftv1alpha1.IgnitionPayloadStatusApplyConfiguration{}
+	case hypershiftv1alpha1.SchemeGroupVersion.WithKind("PayloadReference"):
+		return &applyconfigurationhypershiftv1alpha1.PayloadReferenceApplyConfiguration{}
 
 		// Group=hypershift.openshift.io, Version=v1beta1
 	case v1beta1.SchemeGroupVersion.WithKind("AddressPair"):

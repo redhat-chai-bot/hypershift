@@ -2,6 +2,7 @@ package karpenterignition
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,9 +11,11 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	ignitionv1alpha1 "github.com/openshift/hypershift/api/hypershift/v1alpha1"
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	hyperkarpenterv1 "github.com/openshift/hypershift/api/karpenter/v1"
 	"github.com/openshift/hypershift/api/util/ipnet"
+	"github.com/openshift/hypershift/hypershift-operator/controllers/nodepool"
 	"github.com/openshift/hypershift/support/api"
 	"github.com/openshift/hypershift/support/k8sutil"
 	karpenterutil "github.com/openshift/hypershift/support/karpenter"
@@ -25,6 +28,8 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/api/image/docker10"
 
+	awskarpenterv1 "github.com/aws/karpenter-provider-aws/pkg/apis/v1"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -33,11 +38,93 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	karpenterv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/go-logr/logr/testr"
 	"go.uber.org/mock/gomock"
 )
+
+func TestRetireDrainedPayloadGeneration(t *testing.T) {
+	const (
+		namespace    = "clusters-example"
+		nodePoolName = "karpenter-default"
+	)
+	previousGeneration := int64(0)
+	currentGeneration := int64(1)
+	payload := &ignitionv1alpha1.IgnitionPayload{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "ignition-payload-karpenter-nodeclass-default"},
+		Status: ignitionv1alpha1.IgnitionPayloadStatus{
+			Current:  ignitionv1alpha1.PayloadReference{Token: "current", ConfigHash: "current-hash", RolloutHash: "current-rollout", Generation: &currentGeneration},
+			Previous: ignitionv1alpha1.PayloadReference{Token: "previous", ConfigHash: "previous-hash", RolloutHash: "previous-rollout", Generation: &previousGeneration},
+		},
+	}
+	currentUserData := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "user-data-current"}, Data: map[string][]byte{"value": []byte("current-userdata")}}
+	oldUserData := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: fmt.Sprintf("%s-%s-%d", nodepool.UserDataSecrePrefix, nodePoolName, previousGeneration)}}
+	openshiftNodeClass := &hyperkarpenterv1.OpenshiftEC2NodeClass{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+
+	t.Run("When the guest NodeClass still has old userdata, it should keep the previous generation", func(t *testing.T) {
+		managementClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(payload.DeepCopy(), currentUserData.DeepCopy(), oldUserData.DeepCopy()).Build()
+		guestNodeClass := &awskarpenterv1.EC2NodeClass{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: awskarpenterv1.EC2NodeClassSpec{UserData: ptr.To("old-userdata")}}
+		guestClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(guestNodeClass).Build()
+		r := &KarpenterIgnitionReconciler{ManagementClient: managementClient, GuestClient: guestClient}
+
+		if err := r.retireDrainedPayloadGeneration(t.Context(), payload.DeepCopy(), openshiftNodeClass, currentUserData, nodePoolName); err != nil {
+			t.Fatal(err)
+		}
+		live := &ignitionv1alpha1.IgnitionPayload{}
+		if err := managementClient.Get(t.Context(), client.ObjectKeyFromObject(payload), live); err != nil {
+			t.Fatal(err)
+		}
+		if live.Spec.RetiredGeneration != nil {
+			t.Fatalf("previous generation was retired before acknowledgement: %d", *live.Spec.RetiredGeneration)
+		}
+		if err := managementClient.Get(t.Context(), client.ObjectKeyFromObject(oldUserData), &corev1.Secret{}); err != nil {
+			t.Fatalf("previous userdata was deleted before acknowledgement: %v", err)
+		}
+	})
+
+	t.Run("When the guest NodeClass embeds current userdata but an old launch is in flight, it should conservatively retain the previous generation", func(t *testing.T) {
+		managementClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(payload.DeepCopy(), currentUserData.DeepCopy(), oldUserData.DeepCopy()).Build()
+		guestNodeClass := &awskarpenterv1.EC2NodeClass{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: awskarpenterv1.EC2NodeClassSpec{UserData: ptr.To("current-userdata")}}
+		inFlight := &karpenterv1.NodeClaim{ObjectMeta: metav1.ObjectMeta{Name: "old-generation-launch"}}
+		guestClient := fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(guestNodeClass, inFlight).Build()
+		r := &KarpenterIgnitionReconciler{ManagementClient: managementClient, GuestClient: guestClient}
+
+		if err := r.retireDrainedPayloadGeneration(t.Context(), payload.DeepCopy(), openshiftNodeClass, currentUserData, nodePoolName); err != nil {
+			t.Fatal(err)
+		}
+		live := &ignitionv1alpha1.IgnitionPayload{}
+		if err := managementClient.Get(t.Context(), client.ObjectKeyFromObject(payload), live); err != nil {
+			t.Fatal(err)
+		}
+		if live.Spec.RetiredGeneration != nil {
+			t.Fatalf("previous generation was acknowledged without proving old NodeClaims disappeared: %#v", live.Spec.RetiredGeneration)
+		}
+		if err := managementClient.Get(t.Context(), client.ObjectKeyFromObject(oldUserData), &corev1.Secret{}); err != nil {
+			t.Fatalf("previous userdata was deleted while a launch remained in flight: %v", err)
+		}
+	})
+}
+
+func TestSelectedLegacyTokenSecret(t *testing.T) {
+	const legacyToken = "legacy-selected-bearer"
+	encoded := base64.StdEncoding.EncodeToString([]byte(legacyToken))
+	userData := fmt.Sprintf(`{"ignition":{"config":{"merge":[{"httpHeaders":[{"name":"Authorization","value":"Bearer %s"}]}]}}}`, encoded)
+	guestNodeClass := &awskarpenterv1.EC2NodeClass{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: awskarpenterv1.EC2NodeClassSpec{UserData: &userData}}
+	selected := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "clusters-example", Name: "token-selected"}, Data: map[string][]byte{nodepool.TokenSecretTokenKey: []byte(legacyToken), "payload": []byte("exact-old-bytes")}}
+	r := &KarpenterIgnitionReconciler{
+		GuestClient:      fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(guestNodeClass).Build(),
+		ManagementClient: fake.NewClientBuilder().WithScheme(api.Scheme).WithObjects(selected).Build(),
+	}
+	name, err := r.selectedLegacyTokenSecret(t.Context(), selected.Namespace, guestNodeClass.Name, "new-cr-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != selected.Name {
+		t.Fatalf("selected userdata resolved %q, expected %q", name, selected.Name)
+	}
+}
 
 const (
 	testNamespace           = "clusters-test"
