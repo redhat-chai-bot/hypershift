@@ -2,6 +2,8 @@
 
 To publish the services from the Hosted Control Plane, we need to understand the available strategies and their implications. Let's explore them.
 
+For the opt-in developer-preview `spec.publishing` API, including router NodePort exposure and atomic migration, see [Configure service publishing presets](../common/service-publishing.md). The examples on this page use the legacy `spec.services` API, which remains supported.
+
 ## Service Publishing Strategies
 
 Let's delve into the motivations for each of the strategies.

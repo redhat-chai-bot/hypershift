@@ -6,7 +6,7 @@ HyperShift has two separate feature gate systems that serve different purposes. 
 
 | System | Scope | Set by |
 |--------|-------|--------|
-| **Management cluster feature gates** | CRD schemas, HyperShift Operator, Control Plane Operator | `hypershift install --tech-preview-no-upgrade` |
+| **Management cluster feature gates** | CRD schemas, HyperShift Operator, Control Plane Operator | `hypershift install --feature-set=<set>` |
 | **Hosted Cluster feature gates** | OCP release payload for a single tenant | `spec.configuration.featureGate.featureSet` on the HostedCluster |
 
 !!! warning
@@ -24,13 +24,21 @@ These gates apply to the following scenarios:
 - A feature that impacts individual clusters (e.g. introduce using CPOv2 for some HostedClusters)
 - A feature that impacts the HyperShift API (e.g. introduce a new provider like OpenStack, or a new field like AWS tenancy)
 
-All management cluster feature gates are grouped under a single `TechPreviewNoUpgrade` feature set. To enable them, pass `--tech-preview-no-upgrade` at install time:
+Management cluster feature gates have defaults for each fixed feature set. To select technical preview, pass `--feature-set=TechPreviewNoUpgrade` at install time. The existing `--tech-preview-no-upgrade` flag remains an equivalent, supported shorthand:
 
 ```bash
 hypershift install --tech-preview-no-upgrade
 ```
 
-This flag determines which CRD variants are installed (Default vs TechPreviewNoUpgrade) and configures the `HYPERSHIFT_FEATURESET` environment variable that both the HyperShift Operator and Control Plane Operator read.
+The feature set determines which CRD variants are installed and configures the `HYPERSHIFT_FEATURESET` environment variable that both the HyperShift Operator and Control Plane Operator read. Supported values are `Default`, `TechPreviewNoUpgrade`, `DevPreviewNoUpgrade`, and `OKD`; omitting the flags retains `Default`.
+
+For developer-preview features such as `ServicePublishingAPI`, use:
+
+```bash
+hypershift install --feature-set=DevPreviewNoUpgrade
+```
+
+Do not combine developer preview with `--tech-preview-no-upgrade`. Preview sets do not support upgrades. Gates enabled by one preview set are not automatically enabled by another; check individual gate defaults. For publishing examples and migration, see [Configure service publishing presets](common/service-publishing.md).
 
 ### Adding a Management Cluster Feature Gate
 

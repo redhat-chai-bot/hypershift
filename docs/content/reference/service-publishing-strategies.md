@@ -2,6 +2,8 @@
 
 Service publishing strategies control how control plane services are exposed to external users and the data plane.
 
+This page documents the legacy `spec.services` API, which remains supported during coexistence. For the gated, opt-in `spec.publishing` presets and atomic HostedCluster migration, see [Configure service publishing presets](../how-to/common/service-publishing.md).
+
 ## Overview
 
 ### Services

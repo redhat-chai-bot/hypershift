@@ -11,7 +11,7 @@
         (<em>Appears on:</em>
         {{- $prev := "" -}}
         {{- range . -}}
-            {{- if $prev -}}, {{ end -}}
+            {{- if $prev -}},{{ end -}}
             {{ $prev = . }}
             <a href="{{ linkForType . }}">{{ typeDisplayName . }}</a>
         {{- end -}}
