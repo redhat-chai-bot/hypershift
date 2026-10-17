@@ -181,6 +181,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &hypershiftv1beta1.CPUOptionsApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("DataPlaneManagedIdentities"):
 		return &hypershiftv1beta1.DataPlaneManagedIdentitiesApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("DedicatedAPIServerEndpointPublishing"):
+		return &hypershiftv1beta1.DedicatedAPIServerEndpointPublishingApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("DedicatedAPIServerEndpointService"):
+		return &hypershiftv1beta1.DedicatedAPIServerEndpointServiceApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("Diagnostics"):
 		return &hypershiftv1beta1.DiagnosticsApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("DNSSpec"):
@@ -283,6 +287,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &hypershiftv1beta1.ImageContentSourceApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("IngressDefaultCertificateReference"):
 		return &hypershiftv1beta1.IngressDefaultCertificateReferenceApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("IngressLoadBalancerConfig"):
+		return &hypershiftv1beta1.IngressLoadBalancerConfigApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("IngressNodePortConfig"):
+		return &hypershiftv1beta1.IngressNodePortConfigApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("IngressOperatorSpec"):
 		return &hypershiftv1beta1.IngressOperatorSpecApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("InPlaceUpgrade"):
@@ -379,6 +387,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &hypershiftv1beta1.NodePoolSpecApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("NodePoolStatus"):
 		return &hypershiftv1beta1.NodePoolStatusApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("NodePortPublishedService"):
+		return &hypershiftv1beta1.NodePortPublishedServiceApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("NodePortPublishing"):
+		return &hypershiftv1beta1.NodePortPublishingApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("NodePortPublishingStrategy"):
 		return &hypershiftv1beta1.NodePortPublishingStrategyApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("NodeVersion"):
@@ -451,10 +463,16 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &hypershiftv1beta1.SecretReferenceApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ServiceNetworkEntry"):
 		return &hypershiftv1beta1.ServiceNetworkEntryApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("ServicePublishing"):
+		return &hypershiftv1beta1.ServicePublishingApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ServicePublishingStrategy"):
 		return &hypershiftv1beta1.ServicePublishingStrategyApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("ServicePublishingStrategyMapping"):
 		return &hypershiftv1beta1.ServicePublishingStrategyMappingApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("SingleIngressPointPublishing"):
+		return &hypershiftv1beta1.SingleIngressPointPublishingApplyConfiguration{}
+	case v1beta1.SchemeGroupVersion.WithKind("SingleIngressPointService"):
+		return &hypershiftv1beta1.SingleIngressPointServiceApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("SpotOptions"):
 		return &hypershiftv1beta1.SpotOptionsApplyConfiguration{}
 	case v1beta1.SchemeGroupVersion.WithKind("SubnetFilter"):

@@ -45,6 +45,7 @@ type HostedControlPlaneSpecApplyConfiguration struct {
 	KubeConfig                       *KubeconfigSecretRefApplyConfiguration               `json:"kubeconfig,omitempty"`
 	KubeAPIServerDNSName             *string                                              `json:"kubeAPIServerDNSName,omitempty"`
 	Services                         []ServicePublishingStrategyMappingApplyConfiguration `json:"services,omitempty"`
+	Publishing                       *ServicePublishingApplyConfiguration                 `json:"publishing,omitempty"`
 	AuditWebhook                     *corev1.LocalObjectReference                         `json:"auditWebhook,omitempty"`
 	Etcd                             *EtcdSpecApplyConfiguration                          `json:"etcd,omitempty"`
 	Configuration                    *ClusterConfigurationApplyConfiguration              `json:"configuration,omitempty"`
@@ -223,6 +224,14 @@ func (b *HostedControlPlaneSpecApplyConfiguration) WithServices(values ...*Servi
 		}
 		b.Services = append(b.Services, *values[i])
 	}
+	return b
+}
+
+// WithPublishing sets the Publishing field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Publishing field is set to the value of the last call.
+func (b *HostedControlPlaneSpecApplyConfiguration) WithPublishing(value *ServicePublishingApplyConfiguration) *HostedControlPlaneSpecApplyConfiguration {
+	b.Publishing = value
 	return b
 }
 

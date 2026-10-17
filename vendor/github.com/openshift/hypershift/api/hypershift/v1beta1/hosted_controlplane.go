@@ -39,9 +39,19 @@ type HostedControlPlane struct {
 }
 
 // HostedControlPlaneSpec defines the desired state of HostedControlPlane
-// +kubebuilder:validation:XValidation:rule="self.platform.type == 'IBMCloud' ? size(self.services) >= 3 : size(self.services) >= 4",message="spec.services in body should have at least 4 items or 3 for IBMCloud"
+// +kubebuilder:validation:XValidation:rule="!has(self.services) || size(self.services) == 0 || (self.platform.type == 'IBMCloud' ? size(self.services) >= 3 : size(self.services) >= 4)",message="spec.services in body should have at least 4 items or 3 for IBMCloud"
 // +kubebuilder:validation:XValidation:rule="!has(self.operatorConfiguration) || !has(self.operatorConfiguration.clusterNetworkOperator) || !has(self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork) || !self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork || self.networking.networkType == 'Other'",message="disableMultiNetwork can only be set to true when networkType is 'Other'"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.secretEncryption) || has(self.secretEncryption)",message="secretEncryption cannot be removed once configured"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="has(self.publishing) || (has(self.services) && size(self.services) > 0)",message="spec.publishing or non-empty spec.services is required"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || !(self.platform.type in ['AWS', 'Azure', 'GCP', 'PowerVS']) || self.publishing.type in ['SingleIngressPoint', 'DedicatedAPIServerEndpoint']",message="this cloud platform requires SingleIngressPoint or DedicatedAPIServerEndpoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.platform.type != 'OpenStack' || self.publishing.type == 'DedicatedAPIServerEndpoint'",message="OpenStack requires DedicatedAPIServerEndpoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.platform.type != 'IBMCloud' || self.publishing.type == 'NodePort' || (self.publishing.type == 'SingleIngressPoint' && self.publishing.singleIngressPoint.exposure == 'PlatformProvided')",message="IBMCloud requires NodePort or PlatformProvided SingleIngressPoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.platform.type != 'AWS' || (!self.platform.?aws.endpointAccess.hasValue() || self.platform.?aws.endpointAccess.value() != 'Private') || self.publishing.type == 'SingleIngressPoint'",message="AWS Private requires SingleIngressPoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.platform.type != 'Azure' || (!self.platform.?azure.topology.hasValue() || self.platform.?azure.topology.value() != 'Private') || self.publishing.type == 'SingleIngressPoint'",message="Azure Private requires SingleIngressPoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.platform.type != 'Azure' || (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue() || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value() != 'ManagedIdentities') || self.publishing.type == 'SingleIngressPoint'",message="ARO HCP requires SingleIngressPoint"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.publishing.type != 'SingleIngressPoint' || self.publishing.singleIngressPoint.exposure != 'NodePort' || self.platform.type in ['Agent', 'KubeVirt', 'None']",message="SingleIngressPoint NodePort exposure requires Agent, KubeVirt, or None"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.publishing.type != 'SingleIngressPoint' || self.publishing.singleIngressPoint.services.all(s, !has(s.exposure)) || (self.platform.type == 'Azure' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue() || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value() != 'ManagedIdentities'))",message="OAuth dedicated LoadBalancer requires Azure self-managed"
+// +openshift:validation:FeatureGateAwareXValidation:featureGate=ServicePublishingAPI,rule="!has(self.publishing) || self.publishing.type != 'DedicatedAPIServerEndpoint' || !has(self.publishing.dedicatedAPIServerEndpoint) || !has(self.publishing.dedicatedAPIServerEndpoint.services) || self.publishing.dedicatedAPIServerEndpoint.services.all(s, !has(s.exposure)) || (self.platform.type == 'Azure' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue() || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value() != 'ManagedIdentities'))",message="OAuth dedicated LoadBalancer requires Azure self-managed"
 type HostedControlPlaneSpec struct {
 	// releaseImage is the release image applied to the hosted control plane.
 	// +required
@@ -160,9 +170,18 @@ type HostedControlPlaneSpec struct {
 
 	// services defines metadata about how control plane services are published
 	// in the management cluster.
-	// +required
+	// Deprecated: publishing is preferred; services remains populated for older CPOs.
+	// An empty list stays valid for compatibility with objects that publish through spec.publishing,
+	// so the minimum number of items is explicitly zero.
+	// +optional
+	// +kubebuilder:validation:MinItems=0
 	// +kubebuilder:validation:MaxItems=6
-	Services []ServicePublishingStrategyMapping `json:"services"`
+	Services []ServicePublishingStrategyMapping `json:"services,omitempty"`
+
+	// publishing contains the translated policy. Services may coexist for older CPOs.
+	// +openshift:enable:FeatureGate=ServicePublishingAPI
+	// +optional
+	Publishing ServicePublishing `json:"publishing,omitzero"`
 
 	// auditWebhook contains metadata for configuring an audit webhook
 	// endpoint for a cluster to process cluster audit events. It references

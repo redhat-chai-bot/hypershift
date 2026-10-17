@@ -42,6 +42,7 @@ type HostedClusterSpecApplyConfiguration struct {
 	AutoNode                         *AutoNodeApplyConfiguration                          `json:"autoNode,omitempty"`
 	Etcd                             *EtcdSpecApplyConfiguration                          `json:"etcd,omitempty"`
 	Services                         []ServicePublishingStrategyMappingApplyConfiguration `json:"services,omitempty"`
+	Publishing                       *ServicePublishingApplyConfiguration                 `json:"publishing,omitempty"`
 	PullSecret                       *corev1.LocalObjectReference                         `json:"pullSecret,omitempty"`
 	SSHKey                           *corev1.LocalObjectReference                         `json:"sshKey,omitempty"`
 	IssuerURL                        *string                                              `json:"issuerURL,omitempty"`
@@ -198,6 +199,14 @@ func (b *HostedClusterSpecApplyConfiguration) WithServices(values ...*ServicePub
 		}
 		b.Services = append(b.Services, *values[i])
 	}
+	return b
+}
+
+// WithPublishing sets the Publishing field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Publishing field is set to the value of the last call.
+func (b *HostedClusterSpecApplyConfiguration) WithPublishing(value *ServicePublishingApplyConfiguration) *HostedClusterSpecApplyConfiguration {
+	b.Publishing = value
 	return b
 }
 
