@@ -1214,12 +1214,19 @@ func TestReconcileVirtLauncherNetworkPolicyEgressPeers(t *testing.T) {
 }
 
 func TestReconcileServiceNetworkPolicies(t *testing.T) {
+	t.Run("When publishing is malformed, it should preserve service policies", testReconcileServiceNetworkPoliciesPublishingErrors)
 	testCases := []struct {
 		name             string
 		services         []hyperv1.ServicePublishingStrategyMapping
+		publishing       hyperv1.ServicePublishing
 		expectedPolicies []string
 		absentPolicies   []string
 	}{
+		{
+			name:             "When publishing selects direct NodePorts, it should create translated service policies",
+			publishing:       hyperv1.ServicePublishing{Type: hyperv1.ServicePublishingNodePort, NodePort: hyperv1.NodePortPublishing{Address: "192.0.2.10"}},
+			expectedPolicies: []string{"nodeport-oauth", "nodeport-ignition", "nodeport-ignition-proxy", "nodeport-konnectivity", "nodeport-konnectivity-kas"},
+		},
 		{
 			name: "When OAuth uses NodePort, it should create nodeport-oauth policy",
 			services: []hyperv1.ServicePublishingStrategyMapping{
@@ -1314,9 +1321,13 @@ func TestReconcileServiceNetworkPolicies(t *testing.T) {
 			controlPlaneNamespaceName := "test-cp-ns"
 			hcluster := &hyperv1.HostedCluster{
 				Spec: hyperv1.HostedClusterSpec{
-					Platform: hyperv1.PlatformSpec{Type: hyperv1.AWSPlatform},
-					Services: tc.services,
+					Platform:   hyperv1.PlatformSpec{Type: hyperv1.AWSPlatform},
+					Services:   tc.services,
+					Publishing: tc.publishing,
 				},
+			}
+			if tc.publishing.Type != "" {
+				hcluster.Spec.Platform.Type = hyperv1.AgentPlatform
 			}
 
 			scheme := runtime.NewScheme()

@@ -2,10 +2,18 @@ package netutil
 
 import (
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"github.com/openshift/hypershift/support/publishing"
+
+	"k8s.io/klog/v2"
 )
 
 func ServicePublishingStrategyByTypeForHCP(hcp *hyperv1.HostedControlPlane, svcType hyperv1.ServiceType) *hyperv1.ServicePublishingStrategy {
-	for _, mapping := range hcp.Spec.Services {
+	services, err := publishing.ServicesForHCP(hcp)
+	if err != nil {
+		klog.Warningf("Failed to resolve service publishing for HostedControlPlane %s/%s: %v", hcp.Namespace, hcp.Name, err)
+		return nil
+	}
+	for _, mapping := range services {
 		if mapping.Service == svcType {
 			return &mapping.ServicePublishingStrategy
 		}
@@ -40,7 +48,12 @@ func UseDedicatedDNS(hcp *hyperv1.HostedControlPlane, svcType hyperv1.ServiceTyp
 }
 
 func ServicePublishingStrategyByTypeByHC(hc *hyperv1.HostedCluster, svcType hyperv1.ServiceType) *hyperv1.ServicePublishingStrategy {
-	for _, mapping := range hc.Spec.Services {
+	services, err := publishing.ServicesForHC(hc)
+	if err != nil {
+		klog.Warningf("Failed to resolve service publishing for HostedCluster %s/%s: %v", hc.Namespace, hc.Name, err)
+		return nil
+	}
+	for _, mapping := range services {
 		if mapping.Service == svcType {
 			return &mapping.ServicePublishingStrategy
 		}

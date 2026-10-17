@@ -70,6 +70,7 @@ import (
 	"github.com/openshift/hypershift/support/netutil"
 	"github.com/openshift/hypershift/support/oidc"
 	"github.com/openshift/hypershift/support/podspec"
+	"github.com/openshift/hypershift/support/publishing"
 	"github.com/openshift/hypershift/support/reconcilerpolicy"
 	"github.com/openshift/hypershift/support/releaseinfo"
 	"github.com/openshift/hypershift/support/secretproviderclass"
@@ -1078,9 +1079,7 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 			condition.Message = err.Error()
 			condition.Reason = hyperv1.InvalidConfigurationReason
 		} else {
-			condition.Status = metav1.ConditionTrue
-			condition.Message = "Configuration passes validation"
-			condition.Reason = hyperv1.AsExpectedReason
+			condition = publishingConfigurationCondition(hcluster, hcp, servicePublishingAPIEnabled())
 		}
 		meta.SetStatusCondition(&hcluster.Status.Conditions, condition)
 	}
@@ -1153,6 +1152,18 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 					hcluster.Status.IgnitionEndpoint = ignitionServerRoute.Spec.Host
 				}
 			}
+			endpoint, endpointErr := r.ignitionRouterNodePortEndpoint(ctx, hcluster, controlPlaneNamespace.GetName(), hcluster.Status.IgnitionEndpoint)
+			if endpointErr != nil {
+				return ctrl.Result{}, endpointErr
+			}
+			// An empty result means the router NodePort Service is missing, is not (yet) a NodePort
+			// Service, or has no allocated https port. Leave the previously reported endpoint in
+			// place in that case, mirroring the conditional shape of the Route and legacy NodePort
+			// arms: clearing it would flip IgnitionEndpointAvailable to False and fail every
+			// NodePool reconcile until the Service reappears.
+			if endpoint != "" {
+				hcluster.Status.IgnitionEndpoint = endpoint
+			}
 		case hyperv1.NodePort:
 			if serviceStrategy.NodePort == nil {
 				// We don't return the error here as reconciling won't solve the input problem.
@@ -1192,7 +1203,7 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 
 			// TODO: (cewong) Remove this hack when we no longer need to support HostedControlPlanes that report
 			// the wrong port for the route strategy.
-			if isAPIServerRoute(hcluster) {
+			if isAPIServerRoute(hcluster, hcp) {
 				hcluster.Status.ControlPlaneEndpoint.Port = 443
 			}
 			hcluster.Status.OAuthCallbackURLTemplate = hcp.Status.OAuthCallbackURLTemplate
@@ -1563,7 +1574,7 @@ func (r *HostedClusterReconciler) reconcile(ctx context.Context, req ctrl.Reques
 	report.execute("CoreHCPChain", critical, func() error {
 		var chainErr error
 		hcp, chainErr = r.reconcileCoreHCPChain(ctx, log, hcluster, hcp, createOrUpdate,
-			controlPlaneNamespace.Name, defaultToControlPlaneV2, p)
+			controlPlaneNamespace.Name, defaultToControlPlaneV2, p, controlPlaneOperatorImageLabels)
 		if chainErr != nil {
 			return chainErr
 		}
@@ -1720,7 +1731,7 @@ func (r *HostedClusterReconciler) reconcileCoreHCPChain(
 	ctx context.Context, log logr.Logger, hcluster *hyperv1.HostedCluster,
 	hcp *hyperv1.HostedControlPlane, createOrUpdate upsert.CreateOrUpdateFN,
 	controlPlaneNamespace string, defaultToControlPlaneV2 bool,
-	p platform.Platform,
+	p platform.Platform, controlPlaneOperatorImageLabels map[string]string,
 ) (*hyperv1.HostedControlPlane, error) {
 	isAutoscalingNeeded, err := r.isAutoscalingNeeded(ctx, hcluster)
 	if err != nil {
@@ -1739,7 +1750,7 @@ func (r *HostedClusterReconciler) reconcileCoreHCPChain(
 				hcp,
 				shouldCheckForStaleCerts(hcluster, defaultToControlPlaneV2),
 				r.kasServingCertHashFromSecret(ctx, hcp),
-				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))))
+				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))), controlPlaneOperatorImageLabels)
 	})
 	if err != nil {
 		return hcp, fmt.Errorf("failed to reconcile hostedcontrolplane: %w", err)
@@ -2962,7 +2973,7 @@ func reconcileHostedControlPlaneAnnotations(hcp *hyperv1.HostedControlPlane, hcl
 
 // reconcileHostedControlPlane reconciles the given HostedControlPlane, which
 // will be mutated.
-func reconcileHostedControlPlane(hcp *hyperv1.HostedControlPlane, hcluster *hyperv1.HostedCluster, isAutoscalingNeeded bool, isAWSNodeTerminationHandlerNeeded bool, certRenewalAnnotations func() (map[string]string, error)) error {
+func reconcileHostedControlPlane(hcp *hyperv1.HostedControlPlane, hcluster *hyperv1.HostedCluster, isAutoscalingNeeded bool, isAWSNodeTerminationHandlerNeeded bool, certRenewalAnnotations func() (map[string]string, error), cpoImageLabels ...map[string]string) error {
 	if err := reconcileHostedControlPlaneAnnotations(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded, certRenewalAnnotations); err != nil {
 		return err
 	}
@@ -3013,7 +3024,13 @@ func reconcileHostedControlPlane(hcp *hyperv1.HostedControlPlane, hcluster *hype
 	hcp.Spec.ClusterID = hcluster.Spec.ClusterID
 	hcp.Spec.InfraID = hcluster.Spec.InfraID
 	hcp.Spec.DNS = hcluster.Spec.DNS
-	hcp.Spec.Services = hcluster.Spec.Services
+	var labels map[string]string
+	if len(cpoImageLabels) > 0 {
+		labels = cpoImageLabels[0]
+	}
+	if err := reconcileHostedControlPlanePublishing(hcp, hcluster, servicePublishingAPIEnabled(), labels); err != nil {
+		return err
+	}
 	hcp.Spec.ControllerAvailabilityPolicy = hcluster.Spec.ControllerAvailabilityPolicy
 	hcp.Spec.InfrastructureAvailabilityPolicy = hcluster.Spec.InfrastructureAvailabilityPolicy
 	hcp.Spec.Etcd.ManagementType = hcluster.Spec.Etcd.ManagementType
@@ -3389,7 +3406,11 @@ func (r *HostedClusterReconciler) reconcileOpenShiftTrustedCAs(ctx context.Conte
 }
 
 func servicePublishingStrategyByType(hcp *hyperv1.HostedCluster, svcType hyperv1.ServiceType) *hyperv1.ServicePublishingStrategy {
-	for _, mapping := range hcp.Spec.Services {
+	services, err := publishing.ServicesForHC(hcp)
+	if err != nil {
+		return nil
+	}
+	for _, mapping := range services {
 		if mapping.Service == svcType {
 			return &mapping.ServicePublishingStrategy
 		}
@@ -4396,7 +4417,14 @@ func (r *HostedClusterReconciler) reconcileClusterPrometheusRBAC(ctx context.Con
 
 func (r *HostedClusterReconciler) validateConfigAndClusterCapabilities(ctx context.Context, hc *hyperv1.HostedCluster) error {
 	var errs []error
-	for _, svc := range hc.Spec.Services {
+	services, publishingErr := publishing.ServicesForHC(hc)
+	if publishingErr != nil {
+		errs = append(errs, publishingErr)
+	}
+	if err := r.validateRouterNodePortImageCapability(ctx, hc); err != nil {
+		errs = append(errs, err)
+	}
+	for _, svc := range services {
 		if svc.Type == hyperv1.Route && !r.ManagementClusterCapabilities.Has(capabilities.CapabilityRoute) {
 			errs = append(errs, fmt.Errorf("cluster does not support Routes, but service %q is exposed via a Route", svc.Service))
 		}
@@ -4670,8 +4698,12 @@ func (r *HostedClusterReconciler) validateKubevirtConfig(ctx context.Context, hc
 
 // validatePublishingStrategyMapping validates that each published serviceType has a unique hostname.
 func (r *HostedClusterReconciler) validatePublishingStrategyMapping(hc *hyperv1.HostedCluster) error {
-	hostnameServiceMap := make(map[string]string, len(hc.Spec.Services))
-	for _, svc := range hc.Spec.Services {
+	services, err := publishing.ServicesForHC(hc)
+	if err != nil {
+		return err
+	}
+	hostnameServiceMap := make(map[string]string, len(services))
+	for _, svc := range services {
 		hostname := ""
 		if svc.Type == hyperv1.LoadBalancer && svc.LoadBalancer != nil {
 			hostname = svc.LoadBalancer.Hostname
@@ -5057,7 +5089,11 @@ func validateNodePortPortRange(hc *hyperv1.HostedCluster) field.ErrorList {
 	}
 
 	// Validate NodePort.Port against the configured range
-	for idx, svc := range hc.Spec.Services {
+	services, publishingErr := publishing.ServicesForHC(hc)
+	if publishingErr != nil {
+		return append(errs, field.Invalid(field.NewPath("spec.publishing"), hc.Spec.Publishing, publishingErr.Error()))
+	}
+	for idx, svc := range services {
 		if svc.Service == hyperv1.APIServer && svc.Type == hyperv1.NodePort && svc.NodePort != nil {
 			port := svc.NodePort.Port
 			if port > 0 && (port < minPort || port > maxPort) {
@@ -5909,7 +5945,11 @@ func (r *HostedClusterReconciler) reconcileSREMetricsConfig(ctx context.Context,
 }
 
 func getNodePortIP(hcluster *hyperv1.HostedCluster) (net.IP, *field.Error) {
-	for idx, svc := range hcluster.Spec.Services {
+	services, err := publishing.ServicesForHC(hcluster)
+	if err != nil {
+		return nil, field.Invalid(field.NewPath("spec.publishing"), hcluster.Spec.Publishing, err.Error())
+	}
+	for idx, svc := range services {
 		if svc.Service == hyperv1.APIServer && svc.Type == hyperv1.NodePort {
 			if svc.NodePort == nil {
 				return nil, field.Required(field.NewPath(fmt.Sprintf("spec.Services[%v].NodePort", idx)), "Nodeport can not be empty")
@@ -5954,13 +5994,17 @@ func ensureHostedResourcesAreEmpty(ctx context.Context, crclient client.Client, 
 	return nil
 }
 
-func isAPIServerRoute(hcluster *hyperv1.HostedCluster) bool {
-	for _, svc := range hcluster.Spec.Services {
-		if svc.Service == hyperv1.APIServer {
-			return svc.Type == hyperv1.Route
+func isAPIServerRoute(hcluster *hyperv1.HostedCluster, hcp *hyperv1.HostedControlPlane) bool {
+	if hcp != nil {
+		if netutil.HCPRouterNodePort(hcp) != nil {
+			return false
+		}
+		if strategy := netutil.ServicePublishingStrategyByTypeForHCP(hcp, hyperv1.APIServer); strategy != nil {
+			return strategy.Type == hyperv1.Route
 		}
 	}
-	return false
+	strategy := servicePublishingStrategyByType(hcluster, hyperv1.APIServer)
+	return strategy != nil && strategy.Type == hyperv1.Route
 }
 
 // FindStatusCondition finds the conditionType in conditions.

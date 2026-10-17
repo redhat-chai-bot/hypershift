@@ -1216,31 +1216,7 @@ func reconcileDeprecationValidatingAdmissionPolicy(ctx context.Context, client c
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, client, deprecationPolicy, func() error {
-		deprecationPolicy.Spec.FailurePolicy = ptr.To(admissionregistrationv1.Ignore)
-		if deprecationPolicy.Spec.MatchConstraints == nil {
-			deprecationPolicy.Spec.MatchConstraints = &admissionregistrationv1.MatchResources{}
-		}
-		deprecationPolicy.Spec.MatchConstraints.ResourceRules = []admissionregistrationv1.NamedRuleWithOperations{
-			{
-				RuleWithOperations: admissionregistrationv1.RuleWithOperations{
-					Operations: []admissionregistrationv1.OperationType{
-						admissionregistrationv1.Create,
-						admissionregistrationv1.Update,
-					},
-					Rule: admissionregistrationv1.Rule{
-						APIGroups:   []string{"hypershift.openshift.io"},
-						APIVersions: []string{"v1beta1"},
-						Resources:   []string{"hostedclusters"},
-					},
-				},
-			},
-		}
-		deprecationPolicy.Spec.Validations = []admissionregistrationv1.Validation{
-			{
-				Expression: "!(has(object.spec.configuration) && has(object.spec.configuration.scheduler) && has(object.spec.configuration.scheduler.profileCustomizations) && has(object.spec.configuration.scheduler.profileCustomizations.dynamicResourceAllocation))",
-				Message:    "The field spec.configuration.scheduler.profileCustomizations.dynamicResourceAllocation is deprecated and has no effect",
-			},
-		}
+		deprecationPolicy.Spec = assets.HyperShiftDeprecationPolicy{}.Build().Spec
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to reconcile ValidatingAdmissionPolicy: %w", err)
@@ -1253,10 +1229,7 @@ func reconcileDeprecationValidatingAdmissionPolicy(ctx context.Context, client c
 		},
 	}
 	if _, err := controllerutil.CreateOrUpdate(ctx, client, deprecationPolicyBinding, func() error {
-		deprecationPolicyBinding.Spec.PolicyName = deprecationPolicy.Name
-		deprecationPolicyBinding.Spec.ValidationActions = []admissionregistrationv1.ValidationAction{
-			admissionregistrationv1.Warn,
-		}
+		deprecationPolicyBinding.Spec = assets.HyperShiftDeprecationPolicyBinding{}.Build().Spec
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to reconcile ValidatingAdmissionPolicyBinding: %w", err)

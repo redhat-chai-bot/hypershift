@@ -1439,6 +1439,22 @@ func TestServiceFirstNodePortAvailable(t *testing.T) {
 
 func TestServicePublishingStrategyByType(t *testing.T) {
 	t.Parallel()
+	t.Run("When a HC uses publishing, it should resolve the translated service without mutating the HC", func(t *testing.T) {
+		hc := hostedClusterPublishingFixture(t)
+		before := hc.DeepCopy()
+		strategy := servicePublishingStrategyByType(hc, hyperv1.APIServer)
+		g := NewGomegaWithT(t)
+		g.Expect(strategy).NotTo(BeNil())
+		g.Expect(strategy.Type).To(Equal(hyperv1.Route))
+		g.Expect(strategy.Route.Hostname).To(Equal("api.hcp.example.com"))
+		strategy.Route.Hostname = "changed.example.com"
+		g.Expect(hc).To(Equal(before))
+	})
+	t.Run("When publishing is invalid, it should not fabricate a legacy strategy", func(t *testing.T) {
+		hc := hostedClusterPublishingFixture(t)
+		hc.Spec.Publishing.SingleIngressPoint.Services = nil
+		NewGomegaWithT(t).Expect(servicePublishingStrategyByType(hc, hyperv1.APIServer)).To(BeNil())
+	})
 	tests := []struct {
 		name                              string
 		inputHostedCluster                *hyperv1.HostedCluster

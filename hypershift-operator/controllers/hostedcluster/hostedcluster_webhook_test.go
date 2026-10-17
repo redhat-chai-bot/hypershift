@@ -515,6 +515,21 @@ func customKubeVirtServiceMap() []v1beta1.ServicePublishingStrategyMapping {
 }
 
 func TestKubevirtClusterServiceDefaulting(t *testing.T) {
+	t.Run("When publishing is configured, it should not add legacy services", func(t *testing.T) {
+		hc := hostedClusterPublishingFixture(t)
+		hc.Spec.Platform = v1beta1.PlatformSpec{Type: v1beta1.KubevirtPlatform, Kubevirt: &v1beta1.KubevirtPlatformSpec{}}
+		before := hc.Spec.Publishing.DeepCopy()
+		defaulter := hostedClusterDefaulter{}
+		if err := defaulter.Default(t.Context(), hc); err != nil {
+			t.Fatal(err)
+		}
+		if len(hc.Spec.Services) != 0 {
+			t.Fatalf("publishing HC acquired legacy services: %v", hc.Spec.Services)
+		}
+		if !reflect.DeepEqual(before, &hc.Spec.Publishing) {
+			t.Fatal("publishing policy was mutated")
+		}
+	})
 	for _, testCase := range []struct {
 		name             string
 		hc               *v1beta1.HostedCluster

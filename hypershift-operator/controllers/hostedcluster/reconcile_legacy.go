@@ -335,6 +335,9 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 			isAWSNodeTerminationHandlerNeeded = true
 		}
 		_, hcpErr := createOrUpdate(ctx, r.Client, hcp, func() error {
+			if err := validateRouterNodePortCapability(hcluster, nil); err != nil {
+				return err
+			}
 			// Skip cert annotation resolution during pull secret recovery — it requires
 			// the pull secret to resolve the CPO image, which is unavailable here.
 			return reconcileHostedControlPlane(hcp, hcluster, isAutoscalingNeeded, isAWSNodeTerminationHandlerNeeded,
@@ -354,7 +357,6 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get controlPlaneOperatorImageLabels: %w", err)
 	}
-
 	_, cpoSupportsKASCustomKubeconfig := controlPlaneOperatorImageLabels[controlPlaneOperatorSupportsKASCustomKubeconfigLabel]
 
 	if cpoSupportsKASCustomKubeconfig {
@@ -698,9 +700,7 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 			condition.Message = err.Error()
 			condition.Reason = hyperv1.InvalidConfigurationReason
 		} else {
-			condition.Status = metav1.ConditionTrue
-			condition.Message = "Configuration passes validation"
-			condition.Reason = hyperv1.AsExpectedReason
+			condition = publishingConfigurationCondition(hcluster, hcp, servicePublishingAPIEnabled())
 		}
 		meta.SetStatusCondition(&hcluster.Status.Conditions, condition)
 	}
@@ -773,6 +773,18 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 					hcluster.Status.IgnitionEndpoint = ignitionServerRoute.Spec.Host
 				}
 			}
+			endpoint, endpointErr := r.ignitionRouterNodePortEndpoint(ctx, hcluster, controlPlaneNamespace.GetName(), hcluster.Status.IgnitionEndpoint)
+			if endpointErr != nil {
+				return ctrl.Result{}, endpointErr
+			}
+			// An empty result means the router NodePort Service is missing, is not (yet) a NodePort
+			// Service, or has no allocated https port. Leave the previously reported endpoint in
+			// place in that case, mirroring the conditional shape of the Route and legacy NodePort
+			// arms: clearing it would flip IgnitionEndpointAvailable to False and fail every
+			// NodePool reconcile until the Service reappears.
+			if endpoint != "" {
+				hcluster.Status.IgnitionEndpoint = endpoint
+			}
 		case hyperv1.NodePort:
 			if serviceStrategy.NodePort == nil {
 				// We don't return the error here as reconciling won't solve the input problem.
@@ -812,7 +824,7 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 
 			// TODO: (cewong) Remove this hack when we no longer need to support HostedControlPlanes that report
 			// the wrong port for the route strategy.
-			if isAPIServerRoute(hcluster) {
+			if isAPIServerRoute(hcluster, hcp) {
 				hcluster.Status.ControlPlaneEndpoint.Port = 443
 			}
 			hcluster.Status.OAuthCallbackURLTemplate = hcp.Status.OAuthCallbackURLTemplate
@@ -1517,7 +1529,7 @@ func (r *HostedClusterReconciler) reconcileLegacy(ctx context.Context, req ctrl.
 				hcp,
 				shouldCheckForStaleCerts(hcluster, defaultToControlPlaneV2),
 				r.kasServingCertHashFromSecret(ctx, hcp),
-				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))))
+				r.kasServingCertHashFromEndpoint(ctx, kasHostAndPortFromHCP(hcp))), controlPlaneOperatorImageLabels)
 	})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile hostedcontrolplane: %w", err)

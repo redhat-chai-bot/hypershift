@@ -236,6 +236,32 @@ func TestLabelHCPRoutes(t *testing.T) {
 		want    bool
 		envVars map[string]string
 	}{
+		{
+			name: "When Agent publishing uses a NodePort router, it should label routes for that router",
+			hcp:  &hyperv1.HostedControlPlane{Spec: hyperv1.HostedControlPlaneSpec{Platform: hyperv1.PlatformSpec{Type: hyperv1.AgentPlatform}, Publishing: ingressPublishingForTest(hyperv1.IngressExposureNodePort)}},
+			want: true,
+		},
+		{
+			name: "When Agent publishing uses a LoadBalancer router, it should label routes for that router",
+			hcp:  &hyperv1.HostedControlPlane{Spec: hyperv1.HostedControlPlaneSpec{Platform: hyperv1.PlatformSpec{Type: hyperv1.AgentPlatform}, Publishing: ingressPublishingForTest(hyperv1.IngressExposureLoadBalancer)}},
+			want: true,
+		},
+		{
+			name: "When Agent platform provides ingress, it should not label routes for an HCP router",
+			hcp:  &hyperv1.HostedControlPlane{Spec: hyperv1.HostedControlPlaneSpec{Platform: hyperv1.PlatformSpec{Type: hyperv1.AgentPlatform}, Publishing: ingressPublishingForTest(hyperv1.IngressExposurePlatformProvided)}},
+		},
+		{
+			name: "When publishing disagrees with legacy dedicated API services, it should retain legacy route labels",
+			hcp:  &hyperv1.HostedControlPlane{Spec: hyperv1.HostedControlPlaneSpec{Platform: hyperv1.PlatformSpec{Type: hyperv1.AgentPlatform}, Publishing: ingressPublishingForTest(hyperv1.IngressExposureNodePort), Services: []hyperv1.ServicePublishingStrategyMapping{{Service: hyperv1.APIServer, ServicePublishingStrategy: hyperv1.ServicePublishingStrategy{Type: hyperv1.LoadBalancer}}}}},
+		},
+		{
+			name: "When ARO platform provided ingress and Swift are enabled, it should retain shared ingress route labels",
+			hcp: &hyperv1.HostedControlPlane{Spec: hyperv1.HostedControlPlaneSpec{
+				Platform:   hyperv1.PlatformSpec{Type: hyperv1.AzurePlatform, Azure: &hyperv1.AzurePlatformSpec{Topology: hyperv1.AzureTopologyPublicAndPrivate, AzureAuthenticationConfig: hyperv1.AzureAuthenticationConfiguration{AzureAuthenticationConfigType: hyperv1.AzureAuthenticationTypeManagedIdentities}, Private: hyperv1.AzurePrivateSpec{Type: hyperv1.AzurePrivateTypeSwift}}},
+				Publishing: ingressPublishingForTest(hyperv1.IngressExposurePlatformProvided),
+			}},
+			want: true,
+		},
 		// Shared Ingress Tests
 		{
 			name: "When Swift networking is active via API field, it should always label routes",

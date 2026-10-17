@@ -10,6 +10,7 @@ import (
 
 // Define new featuregates here
 const (
+	ServicePublishingAPI featuregate.Feature = "ServicePublishingAPI"
 	// AROHCPManagedIdentities is a feature gate for enabling HCP components to authenticate with Azure by client certificate
 	// owner: @username
 	// alpha: v0.1.49
@@ -58,7 +59,8 @@ const (
 
 // Initialize new features here
 var (
-	allFeatures = featuregates.NewFeatureSetAwareFeatures()
+	allFeatures                 = featuregates.NewFeatureSetAwareFeatures()
+	servicePublishingAPIFeature = featuregates.NewFeature(ServicePublishingAPI, featuregates.WithEnableForFeatureSets(configv1.DevPreviewNoUpgrade))
 
 	aroHCPManagedIdentitiesFeature = featuregates.NewFeature(AROHCPManagedIdentities, featuregates.WithEnableForFeatureSets(configv1.TechPreviewNoUpgrade))
 	openStackFeature               = featuregates.NewFeature(OpenStack, featuregates.WithEnableForFeatureSets(configv1.TechPreviewNoUpgrade))
@@ -70,6 +72,7 @@ var (
 )
 
 func init() {
+	allFeatures.AddFeature(servicePublishingAPIFeature)
 	// Add featuregates here
 	allFeatures.AddFeature(aroHCPManagedIdentitiesFeature)
 	allFeatures.AddFeature(openStackFeature)

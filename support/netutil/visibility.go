@@ -238,6 +238,12 @@ func LabelHCPRoutes(hcp *hyperv1.HostedControlPlane) bool {
 	if UseSharedIngressHCP(hcp) || UseSwiftNetworkingHCP(hcp) {
 		return true
 	}
+	if policy := PublishingForHCP(hcp); policy != nil {
+		if hcp.Spec.Platform.Type == hyperv1.IBMCloudPlatform {
+			return false
+		}
+		return !IsPublicHCP(hcp) || (policy.Type == hyperv1.ServicePublishingSingleIngressPoint && policy.SingleIngressPoint.Exposure != hyperv1.IngressExposurePlatformProvided)
+	}
 
 	switch hcp.Spec.Platform.Type {
 	case hyperv1.AWSPlatform, hyperv1.GCPPlatform, hyperv1.AzurePlatform:

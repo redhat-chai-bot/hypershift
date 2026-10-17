@@ -62,6 +62,9 @@ func (defaulter *hostedClusterDefaulter) Default(ctx context.Context, hcluster *
 		}
 
 		// Default services for any service types that were not configured
+		if hcluster.Spec.Publishing.Type != "" {
+			return nil
+		}
 		existingServices := map[hyperv1.ServiceType]bool{}
 		defaults := core.GetIngressServicePublishingStrategyMapping(hcluster.Spec.Networking.NetworkType, false, false)
 		for _, entry := range hcluster.Spec.Services {

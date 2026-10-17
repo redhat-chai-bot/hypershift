@@ -17,6 +17,7 @@ import (
 	"github.com/openshift/hypershift/support/config"
 	"github.com/openshift/hypershift/support/k8sutil"
 	"github.com/openshift/hypershift/support/netutil"
+	"github.com/openshift/hypershift/support/publishing"
 	"github.com/openshift/hypershift/support/rhobsmonitoring"
 	"github.com/openshift/hypershift/support/upsert"
 
@@ -202,7 +203,11 @@ func (r *HostedClusterReconciler) reconcilePlatformNetworkPolicies(ctx context.C
 }
 
 func (r *HostedClusterReconciler) reconcileServiceNetworkPolicies(ctx context.Context, createOrUpdate upsert.CreateOrUpdateFN, hcluster *hyperv1.HostedCluster, controlPlaneNamespaceName string) error {
-	for _, svc := range hcluster.Spec.Services {
+	services, err := publishing.ServicesForHC(hcluster)
+	if err != nil {
+		return err
+	}
+	for _, svc := range services {
 		switch svc.Service {
 		case hyperv1.OAuthServer:
 			if err := r.reconcileOAuthNetworkPolicies(ctx, createOrUpdate, hcluster, svc, controlPlaneNamespaceName); err != nil {
@@ -805,7 +810,11 @@ func buildVirtLauncherNetworkPolicyBase(log logr.Logger, policy *networkingv1.Ne
 	}
 
 	nodeAddressesMap := make(map[string]bool)
-	for _, hcService := range hcluster.Spec.Services {
+	services, err := publishing.ServicesForHC(hcluster)
+	if err != nil {
+		return err
+	}
+	for _, hcService := range services {
 		if hcService.Type != hyperv1.NodePort {
 			continue
 		}
