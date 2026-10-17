@@ -7135,6 +7135,9 @@ spec:
                 description: |-
                   services defines metadata about how control plane services are published
                   in the management cluster.
+                  Deprecated: publishing is preferred; services remains populated for older CPOs.
+                  An empty list stays valid for compatibility with objects that publish through spec.publishing,
+                  so the minimum number of items is explicitly zero.
                 items:
                   description: |-
                     ServicePublishingStrategyMapping specifies how individual control plane services endpoints are published for consumption.
@@ -7256,6 +7259,7 @@ spec:
                   - servicePublishingStrategy
                   type: object
                 maxItems: 6
+                minItems: 0
                 type: array
               sshKey:
                 description: sshKey is a reference to a secret containing the SSH
@@ -7327,22 +7331,22 @@ spec:
             - platform
             - pullSecret
             - releaseImage
-            - services
             - sshKey
             type: object
             x-kubernetes-validations:
-            - message: spec.services in body should have at least 4 items or 3 for
-                IBMCloud
-              rule: 'self.platform.type == ''IBMCloud'' ? size(self.services) >= 3
-                : size(self.services) >= 4'
+            - message: secretEncryption cannot be removed once configured
+              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
             - message: disableMultiNetwork can only be set to true when networkType
                 is 'Other'
               rule: '!has(self.operatorConfiguration) || !has(self.operatorConfiguration.clusterNetworkOperator)
                 || !has(self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork)
                 || !self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork
                 || self.networking.networkType == ''Other'''
-            - message: secretEncryption cannot be removed once configured
-              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
+            - message: spec.services in body should have at least 4 items or 3 for
+                IBMCloud
+              rule: '!has(self.services) || size(self.services) == 0 || (self.platform.type
+                == ''IBMCloud'' ? size(self.services) >= 3 : size(self.services) >=
+                4)'
           status:
             description: status is the status of the HostedControlPlane.
             properties:

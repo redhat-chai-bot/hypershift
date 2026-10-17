@@ -203,8 +203,8 @@ $(CODE_GEN): $(TOOLS_DIR)/go.mod # Build code-gen from tools folder.
 $(STATICCHECK): $(TOOLS_DIR)/go.mod # Build staticcheck from tools folder.
 	cd $(TOOLS_DIR); $(GO) build -tags=tools -o $(BIN_DIR)/staticcheck honnef.co/go/tools/cmd/staticcheck
 
-$(GENAPIDOCS): $(TOOLS_DIR)/go.mod
-	cd $(TOOLS_DIR); $(GO) build -tags=tools -o $(GENAPIDOCS) github.com/ahmetb/gen-crd-api-reference-docs
+$(GENAPIDOCS): $(TOOLS_DIR)/go.mod $(TOOLS_DIR)/api-docs/field_name.go hack/build-api-docs.sh
+	bash hack/build-api-docs.sh $(DIR) $(GENAPIDOCS) $(GO)
 
 $(MOCKGEN): ${TOOLS_DIR}/go.mod
 	cd $(TOOLS_DIR); $(GO) build -tags=tools -o $(BIN_DIR)/mockgen go.uber.org/mock/mockgen
@@ -295,10 +295,16 @@ hypershift-api: $(CONTROLLER_GEN) $(CODE_GEN)
 	# These consolidate with the 3 steps used to generate CRDs by openshift/api.
 	(cd ./api && $(CODE_GEN) empty-partial-schemas)
 	(cd ./api && $(CODE_GEN) schemapatch)
+	# Sort the spec-scope CEL rules of the HostedCluster and HostedControlPlane partial schemas: controller-tools
+	# emits more than twelve validations per scope in a different order on every run, which would make the committed
+	# artifacts and `make verify-ci` unstable.
+	(cd hack/tools && $(GO) run ./publishing-source --canonicalise ../../api/hypershift/v1beta1/zz_generated.featuregated-crd-manifests)
+
 	(cd ./api && $(CODE_GEN) crd-manifest-merge --manifest-merge:payload-manifest-path ./hypershift/v1beta1/featuregates)
 
 	# Move final CRDs to the install folder.
 	mv ./api/hypershift/v1beta1/zz_generated.crd-manifests cmd/install/assets/crds/hypershift-operator/
+	(cd hack/tools && $(GO) run ./publishing-source ../../cmd/install/assets/crds/hypershift-operator/zz_generated.crd-manifests)
 
 	# Copy featuregate manifests alongside CRDs for envtest.
 	mkdir -p cmd/install/assets/crds/hypershift-operator/payload-manifests/featuregates

@@ -19,6 +19,7 @@ require (
 	k8s.io/apiextensions-apiserver v0.34.2
 	k8s.io/apimachinery v0.34.3
 	k8s.io/code-generator v0.34.2
+	k8s.io/gengo v0.0.0-20250704022524-ddb642e17a28
 	k8s.io/utils v0.0.0-20260108192941-914a6e750570
 	sigs.k8s.io/controller-runtime/tools/setup-envtest v0.0.0-20260125163108-a19ec76a3c5d
 	sigs.k8s.io/crdify v0.6.0
@@ -314,7 +315,6 @@ require (
 	k8s.io/apiserver v0.34.3 // indirect
 	k8s.io/client-go v0.34.3 // indirect
 	k8s.io/component-base v0.34.3 // indirect
-	k8s.io/gengo v0.0.0-20250704022524-ddb642e17a28 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250922181213-ec3ebc5fd46b // indirect
 	k8s.io/klog v1.0.0 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect

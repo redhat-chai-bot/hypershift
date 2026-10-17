@@ -220,6 +220,7 @@ hostedclusters.hypershift.openshift.io:
   - KMSEncryption
   - NetworkObservabilityInstall
   - OpenStack
+  - ServicePublishingAPI
   - TLSAdherence
   - TLSGroupPreferences
   FilenameOperatorName: ""
@@ -299,6 +300,7 @@ hostedcontrolplanes.hypershift.openshift.io:
   - KMSEncryption
   - NetworkObservabilityInstall
   - OpenStack
+  - ServicePublishingAPI
   - TLSAdherence
   - TLSGroupPreferences
   FilenameOperatorName: ""
