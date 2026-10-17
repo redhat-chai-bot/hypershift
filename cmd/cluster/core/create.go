@@ -73,6 +73,7 @@ func bindCoreOptions(opts *RawCreateOptions, flags *pflag.FlagSet) {
 	flags.StringVar(&opts.BaseDomain, "base-domain", opts.BaseDomain, "The ingress base domain for the cluster. If omitted for an HCP KubeVirt cluster, this defaults to the management cluster's apps domain.")
 	flags.StringVar(&opts.BaseDomainPrefix, "base-domain-prefix", opts.BaseDomainPrefix, "The ingress base domain prefix for the cluster, defaults to cluster name. Use 'none' for an empty prefix")
 	flags.StringVar(&opts.ExternalDNSDomain, "external-dns-domain", opts.ExternalDNSDomain, "Sets hostname to opinionated values in the specified domain for services with publishing type LoadBalancer or Route.")
+	bindPublishingOptions(opts, flags)
 	flags.StringVar(&opts.NetworkType, "network-type", opts.NetworkType, "Enum specifying the cluster SDN provider. Supports either Calico, OVNKubernetes, OpenShiftSDN or Other.")
 	flags.StringVar(&opts.ReleaseImage, "release-image", opts.ReleaseImage, "The OCP release image for the cluster")
 	flags.StringVar(&opts.PullSecretFile, "pull-secret", opts.PullSecretFile, "File path to a pull secret.")
@@ -165,6 +166,13 @@ type RawCreateOptions struct {
 	MachineCIDR                      []string
 	DefaultDual                      bool
 	ExternalDNSDomain                string
+	PublishingType                   string
+	PublishingExposure               string
+	PublishingAddress                string
+	PublishingPort                   int32
+	PublishingHostname               string
+	PublishingServiceHostnames       []string
+	PublishingServicePorts           []string
 	Arch                             string
 	NodeSelector                     map[string]string
 	PodsLabels                       map[string]string
@@ -729,6 +737,9 @@ type ValidatedCreateOptions struct {
 }
 
 func (opts *RawCreateOptions) Validate(ctx context.Context) (*ValidatedCreateOptions, error) {
+	if err := opts.validatePublishingOptions(); err != nil {
+		return nil, err
+	}
 	if opts.Name == "" {
 		return nil, errors.New("--name is required")
 	}
@@ -1000,6 +1011,9 @@ func CreateCluster(ctx context.Context, rawOpts *RawCreateOptions, rawPlatform P
 
 	if err := platform.ApplyPlatformSpecifics(resources.Cluster); err != nil {
 		return fmt.Errorf("failed to apply platform specifics: %w", err)
+	}
+	if err := applyPublishing(resources.Cluster, opts.RawCreateOptions); err != nil {
+		return fmt.Errorf("failed to configure service publishing: %w", err)
 	}
 
 	if opts.NodePoolReplicas > -1 {

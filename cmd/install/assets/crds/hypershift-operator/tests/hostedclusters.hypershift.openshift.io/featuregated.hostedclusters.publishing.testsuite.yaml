@@ -1,0 +1,37 @@
+apiVersion: apiextensions.k8s.io/v1
+name: "HostedCluster publishing validation [OCPFeatureGate:ServicePublishingAPI] [Jira:HyperShift]"
+crdName: hostedclusters.hypershift.openshift.io
+featureGates:
+  - ServicePublishingAPI
+version: v1beta1
+tests:
+  onCreate:
+    - name: When a dedicated API preset omits endpoint overrides, it should accept derived hostnames
+      initial: |
+        apiVersion: hypershift.openshift.io/v1beta1
+        kind: HostedCluster
+        spec:
+          dns:
+            baseDomain: example.com
+          platform:
+            type: None
+          pullSecret:
+            name: pull-secret
+          release:
+            image: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+          publishing:
+            type: DedicatedAPIServerEndpoint
+    - name: When publishing and legacy services are both absent, it should reject the missing source
+      initial: |
+        apiVersion: hypershift.openshift.io/v1beta1
+        kind: HostedCluster
+        spec:
+          dns:
+            baseDomain: example.com
+          platform:
+            type: None
+          pullSecret:
+            name: pull-secret
+          release:
+            image: quay.io/openshift-release-dev/ocp-release:4.21.10-x86_64
+      expectedError: spec.publishing or non-empty spec.services is required

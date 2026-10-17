@@ -14,7 +14,7 @@
     "status": {
         "featureGates": [
             {
-                "disabled": [],
+                "disabled": [{"name": "ServicePublishingAPI"}],
                 "enabled": [
                     {
                         "name": "ExternalOIDC"

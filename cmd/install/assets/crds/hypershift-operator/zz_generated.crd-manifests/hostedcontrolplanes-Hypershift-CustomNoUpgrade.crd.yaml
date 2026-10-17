@@ -9553,6 +9553,251 @@ spec:
                 required:
                 - type
                 type: object
+              publishing:
+                description: publishing contains the translated policy. Services may
+                  coexist for older CPOs.
+                properties:
+                  dedicatedAPIServerEndpoint:
+                    description: |-
+                      dedicatedAPIServerEndpoint configures optional endpoint overrides.
+                      An empty object selects the preset without overriding any endpoint, so it is a pointer:
+                      the empty object and the absent field are distinct, deliberate user choices.
+                    minProperties: 0
+                    properties:
+                      services:
+                        description: |-
+                          services configures endpoint overrides. Omitted endpoints use their assigned or derived names.
+                          An empty list is equivalent to omitting the field, so the minimum number of items is explicitly zero.
+                        items:
+                          description: DedicatedAPIServerEndpointService configures
+                            an API or OAuth endpoint override.
+                          properties:
+                            exposure:
+                              description: exposure optionally gives OAuthServer a
+                                dedicated LoadBalancer.
+                              enum:
+                              - DedicatedLoadBalancer
+                              maxLength: 24
+                              type: string
+                            hostname:
+                              description: hostname overrides the DNS name; omission
+                                preserves assigned or derived names.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                              x-kubernetes-validations:
+                              - message: hostname must be a valid DNS subdomain
+                                rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              maxLength: 16
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        maxItems: 2
+                        minItems: 0
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exposure override is only valid for OAuthServer
+                      rule: '!has(self.services) || self.services.all(s, !has(s.exposure)
+                        || s.name == ''OAuthServer'')'
+                  nodePort:
+                    description: nodePort configures direct service exposure on management
+                      nodes.
+                    properties:
+                      address:
+                        description: address is a reachable hostname, IPv4, or IPv6
+                          address.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                        x-kubernetes-validations:
+                        - message: address must be a valid hostname, IPv4, or IPv6
+                            address
+                          rule: isIP(self) || (self.lowerAscii().contains(':ffff:')
+                            && isIP(self.lowerAscii().replace(':ffff:', ':fffe:')))
+                            || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            && !self.matches('^[0-9]+(\\.[0-9]+){3}$'))
+                      services:
+                        description: |-
+                          services configures optional per-service port overrides.
+                          An empty list is equivalent to omitting the field, so the minimum number of items is explicitly zero.
+                        items:
+                          description: NodePortPublishedService selects an optional
+                            NodePort for a service.
+                          properties:
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              - Konnectivity
+                              - Ignition
+                              maxLength: 16
+                              type: string
+                            port:
+                              description: port selects a NodePort; omitted ports
+                                are allocated by Kubernetes.
+                              format: int32
+                              maximum: 32767
+                              minimum: 30000
+                              type: integer
+                          required:
+                          - name
+                          type: object
+                        maxItems: 4
+                        minItems: 0
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - address
+                    type: object
+                    x-kubernetes-validations:
+                    - message: explicit port values must be unique across services
+                      rule: '!has(self.services) || self.services.all(x, !has(x.port)
+                        || self.services.filter(y, has(y.port) && y.port == x.port).size()
+                        == 1)'
+                  singleIngressPoint:
+                    description: singleIngressPoint configures the shared control
+                      plane ingress.
+                    properties:
+                      exposure:
+                        description: exposure selects how the shared ingress point
+                          is reached.
+                        enum:
+                        - LoadBalancer
+                        - NodePort
+                        - PlatformProvided
+                        maxLength: 16
+                        type: string
+                      loadBalancer:
+                        description: loadBalancer configures the router LoadBalancer;
+                          an empty object uses its assigned address.
+                        minProperties: 0
+                        properties:
+                          hostname:
+                            description: hostname overrides the router LoadBalancer
+                              DNS name.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                            x-kubernetes-validations:
+                            - message: hostname must be a valid DNS subdomain
+                              rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                        type: object
+                      nodePort:
+                        description: nodePort configures the router NodePort.
+                        properties:
+                          address:
+                            description: address is a reachable hostname, IPv4, or
+                              IPv6 address.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                            x-kubernetes-validations:
+                            - message: address must be a valid hostname, IPv4, or
+                                IPv6 address
+                              rule: isIP(self) || (self.lowerAscii().contains(':ffff:')
+                                && isIP(self.lowerAscii().replace(':ffff:', ':fffe:')))
+                                || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                                && !self.matches('^[0-9]+(\\.[0-9]+){3}$'))
+                          port:
+                            description: port selects a NodePort; omitted ports are
+                              allocated by Kubernetes.
+                            format: int32
+                            maximum: 32767
+                            minimum: 30000
+                            type: integer
+                        required:
+                        - address
+                        type: object
+                      services:
+                        description: services configures optional hostnames and OAuth
+                          exposure. APIServer is required.
+                        items:
+                          description: SingleIngressPointService configures a service
+                            endpoint behind the shared ingress point.
+                          properties:
+                            exposure:
+                              description: exposure optionally gives OAuthServer a
+                                dedicated LoadBalancer.
+                              enum:
+                              - DedicatedLoadBalancer
+                              maxLength: 24
+                              type: string
+                            hostname:
+                              description: hostname overrides the endpoint DNS name;
+                                required for APIServer, otherwise derived when omitted.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                              x-kubernetes-validations:
+                              - message: hostname must be a valid DNS subdomain
+                                rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              - Konnectivity
+                              - Ignition
+                              maxLength: 16
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        maxItems: 4
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - exposure
+                    - services
+                    type: object
+                    x-kubernetes-validations:
+                    - message: SingleIngressPoint requires an APIServer entry with
+                        a hostname
+                      rule: self.services.exists(s, s.name == 'APIServer' && has(s.hostname))
+                    - message: exposure override is only valid for OAuthServer
+                      rule: self.services.all(s, !has(s.exposure) || s.name == 'OAuthServer')
+                    - message: loadBalancer must match ingress exposure
+                      rule: 'self.exposure == ''LoadBalancer'' ? has(self.loadBalancer)
+                        : !has(self.loadBalancer)'
+                    - message: nodePort must match ingress exposure
+                      rule: 'self.exposure == ''NodePort'' ? has(self.nodePort) :
+                        !has(self.nodePort)'
+                  type:
+                    description: type selects the publishing topology.
+                    enum:
+                    - SingleIngressPoint
+                    - DedicatedAPIServerEndpoint
+                    - NodePort
+                    maxLength: 32
+                    type: string
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: singleIngressPoint must match the publishing type
+                  rule: 'self.type == ''SingleIngressPoint'' ? has(self.singleIngressPoint)
+                    : !has(self.singleIngressPoint)'
+                - message: nodePort must match the publishing type
+                  rule: 'self.type == ''NodePort'' ? has(self.nodePort) : !has(self.nodePort)'
+                - message: dedicatedAPIServerEndpoint is forbidden for other publishing
+                    types
+                  rule: self.type == 'DedicatedAPIServerEndpoint' || !has(self.dedicatedAPIServerEndpoint)
               pullSecret:
                 description: pullSecret is a reference to a secret containing the
                   pull secret for the hosted control plane.
@@ -10018,6 +10263,9 @@ spec:
                 description: |-
                   services defines metadata about how control plane services are published
                   in the management cluster.
+                  Deprecated: publishing is preferred; services remains populated for older CPOs.
+                  An empty list stays valid for compatibility with objects that publish through spec.publishing,
+                  so the minimum number of items is explicitly zero.
                 items:
                   description: |-
                     ServicePublishingStrategyMapping specifies how individual control plane services endpoints are published for consumption.
@@ -10056,7 +10304,8 @@ spec:
                               x-kubernetes-validations:
                               - message: hostname must be a valid domain name (e.g.,
                                   example.com)
-                                rule: self.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$')
+                                rule: (self.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$'))
+                                  || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'))
                           type: object
                         nodePort:
                           description: nodePort configures exposing a service using
@@ -10071,9 +10320,13 @@ spec:
                               x-kubernetes-validations:
                               - message: address must be a valid hostname, IPv4, or
                                   IPv6 address
-                                rule: self.matches('^(([a-zA-Z0-9][-a-zA-Z0-9]*\\.)+[a-zA-Z]{2,}|localhost)$')
+                                rule: (self.matches('^(([a-zA-Z0-9][-a-zA-Z0-9]*\\.)+[a-zA-Z]{2,}|localhost)$')
                                   || self.matches('^((\\d{1,3}\\.){3}\\d{1,3})$')
-                                  || self.matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$')
+                                  || self.matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$'))
+                                  || (isIP(self) || (self.lowerAscii().contains(':ffff:')
+                                  && isIP(self.lowerAscii().replace(':ffff:', ':fffe:')))
+                                  || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                                  && !self.matches('^[0-9]+(\\.[0-9]+){3}$')))
                             port:
                               description: |-
                                 port is the port of the NodePort service. If <=0, the port is dynamically
@@ -10098,7 +10351,8 @@ spec:
                               x-kubernetes-validations:
                               - message: hostname must be a valid domain name (e.g.,
                                   example.com)
-                                rule: self.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$')
+                                rule: (self.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$'))
+                                  || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'))
                           type: object
                         type:
                           description: |-
@@ -10139,6 +10393,7 @@ spec:
                   - servicePublishingStrategy
                   type: object
                 maxItems: 6
+                minItems: 0
                 type: array
               sshKey:
                 description: sshKey is a reference to a secret containing the SSH
@@ -10210,22 +10465,92 @@ spec:
             - platform
             - pullSecret
             - releaseImage
-            - services
             - sshKey
             type: object
             x-kubernetes-validations:
-            - message: spec.services in body should have at least 4 items or 3 for
-                IBMCloud
-              rule: 'self.platform.type == ''IBMCloud'' ? size(self.services) >= 3
-                : size(self.services) >= 4'
+            - message: secretEncryption cannot be removed once configured
+              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
             - message: disableMultiNetwork can only be set to true when networkType
                 is 'Other'
               rule: '!has(self.operatorConfiguration) || !has(self.operatorConfiguration.clusterNetworkOperator)
                 || !has(self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork)
                 || !self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork
                 || self.networking.networkType == ''Other'''
-            - message: secretEncryption cannot be removed once configured
-              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
+            - message: this cloud platform requires SingleIngressPoint or DedicatedAPIServerEndpoint
+              rule: '!has(self.publishing) || !(self.platform.type in [''AWS'', ''Azure'',
+                ''GCP'', ''PowerVS'']) || self.publishing.type in [''SingleIngressPoint'',
+                ''DedicatedAPIServerEndpoint'']'
+            - message: AWS Private requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''AWS'' || (!self.platform.?aws.endpointAccess.hasValue()
+                || self.platform.?aws.endpointAccess.value() != ''Private'') || self.publishing.type
+                == ''SingleIngressPoint'''
+            - message: ARO HCP requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''Azure'' || (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities'') || self.publishing.type == ''SingleIngressPoint'''
+            - message: Azure Private requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''Azure'' || (!self.platform.?azure.topology.hasValue()
+                || self.platform.?azure.topology.value() != ''Private'') || self.publishing.type
+                == ''SingleIngressPoint'''
+            - message: IBMCloud requires NodePort or PlatformProvided SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''IBMCloud'' ||
+                self.publishing.type == ''NodePort'' || (self.publishing.type == ''SingleIngressPoint''
+                && self.publishing.singleIngressPoint.exposure == ''PlatformProvided'')'
+            - message: OpenStack requires DedicatedAPIServerEndpoint
+              rule: '!has(self.publishing) || self.platform.type != ''OpenStack''
+                || self.publishing.type == ''DedicatedAPIServerEndpoint'''
+            - message: OAuth dedicated LoadBalancer requires Azure self-managed
+              rule: '!has(self.publishing) || self.publishing.type != ''DedicatedAPIServerEndpoint''
+                || !has(self.publishing.dedicatedAPIServerEndpoint) || !has(self.publishing.dedicatedAPIServerEndpoint.services)
+                || self.publishing.dedicatedAPIServerEndpoint.services.all(s, !has(s.exposure))
+                || (self.platform.type == ''Azure'' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities''))'
+            - message: SingleIngressPoint NodePort exposure requires Agent, KubeVirt,
+                or None
+              rule: '!has(self.publishing) || self.publishing.type != ''SingleIngressPoint''
+                || self.publishing.singleIngressPoint.exposure != ''NodePort'' ||
+                self.platform.type in [''Agent'', ''KubeVirt'', ''None'']'
+            - message: OAuth dedicated LoadBalancer requires Azure self-managed
+              rule: '!has(self.publishing) || self.publishing.type != ''SingleIngressPoint''
+                || self.publishing.singleIngressPoint.services.all(s, !has(s.exposure))
+                || (self.platform.type == ''Azure'' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities''))'
+            - message: spec.services in body should have at least 4 items or 3 for
+                IBMCloud
+              rule: '!has(self.services) || size(self.services) == 0 || (self.platform.type
+                == ''IBMCloud'' ? size(self.services) >= 3 : size(self.services) >=
+                4)'
+            - message: 'legacy services without publishing: hostname must be a valid
+                domain name (e.g., example.com)'
+              optionalOldSelf: true
+              rule: has(self.publishing) || !has(self.services) || self.services.all(service,
+                !has(service.servicePublishingStrategy.loadBalancer) || !has(service.servicePublishingStrategy.loadBalancer.hostname)
+                || (service.servicePublishingStrategy.loadBalancer.hostname.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$')))
+                || (oldSelf.hasValue() && !has(oldSelf.value().publishing) && has(oldSelf.value().services)
+                && oldSelf.value().services == self.services)
+            - message: 'legacy services without publishing: address must be a valid
+                hostname, IPv4, or IPv6 address'
+              optionalOldSelf: true
+              rule: has(self.publishing) || !has(self.services) || self.services.all(service,
+                !has(service.servicePublishingStrategy.nodePort) || !has(service.servicePublishingStrategy.nodePort.address)
+                || (service.servicePublishingStrategy.nodePort.address.matches('^(([a-zA-Z0-9][-a-zA-Z0-9]*\\.)+[a-zA-Z]{2,}|localhost)$')
+                || service.servicePublishingStrategy.nodePort.address.matches('^((\\d{1,3}\\.){3}\\d{1,3})$')
+                || service.servicePublishingStrategy.nodePort.address.matches('^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))$')))
+                || (oldSelf.hasValue() && !has(oldSelf.value().publishing) && has(oldSelf.value().services)
+                && oldSelf.value().services == self.services)
+            - message: 'legacy services without publishing: hostname must be a valid
+                domain name (e.g., example.com)'
+              optionalOldSelf: true
+              rule: has(self.publishing) || !has(self.services) || self.services.all(service,
+                !has(service.servicePublishingStrategy.route) || !has(service.servicePublishingStrategy.route.hostname)
+                || (service.servicePublishingStrategy.route.hostname.matches('^(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}$')))
+                || (oldSelf.hasValue() && !has(oldSelf.value().publishing) && has(oldSelf.value().services)
+                && oldSelf.value().services == self.services)
+            - message: spec.publishing or non-empty spec.services is required
+              rule: has(self.publishing) || (has(self.services) && size(self.services)
+                > 0)
           status:
             description: status is the status of the HostedControlPlane.
             properties:

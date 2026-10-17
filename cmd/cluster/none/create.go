@@ -47,8 +47,12 @@ type CreateOptions struct {
 
 func (o *ValidatedCreateOptions) Complete(ctx context.Context, opts *core.CreateOptions) (core.Platform, error) {
 	var err error
-	if o.APIServerAddress == "" && !o.ExposeThroughLoadBalancer {
+	publishingNodePort := opts.PublishingType == "NodePort" || (opts.PublishingType == "SingleIngressPoint" && opts.PublishingExposure == "NodePort")
+	if o.APIServerAddress == "" && ((opts.PublishingType == "" && !o.ExposeThroughLoadBalancer) || (publishingNodePort && opts.PublishingAddress == "" && !opts.Render)) {
 		o.APIServerAddress, err = core.GetAPIServerAddressByNode(ctx, opts.Log, opts.Kubeconfig)
+	}
+	if publishingNodePort && opts.PublishingAddress == "" {
+		opts.PublishingAddress = o.APIServerAddress
 	}
 	return &CreateOptions{
 		completedCreateOptions: &completedCreateOptions{

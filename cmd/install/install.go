@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -154,6 +155,7 @@ type Options struct {
 	EnableStandaloneKarpenterOperator         bool
 	AroHCPKeyVaultUsersClientID               string
 	TechPreviewNoUpgrade                      bool
+	FeatureSet                                string
 	RegistryOverrides                         string
 	RenderNamespace                           bool
 	PlatformsToInstall                        []string
@@ -186,6 +188,9 @@ func (o *Options) Complete() error {
 
 func (o *Options) Validate() error {
 	var errs []error
+	if err := o.validateFeatureSet(); err != nil {
+		errs = append(errs, err)
+	}
 
 	if o.InstallScope != "" && !Outputs(o.InstallScope).IsValid() {
 		errs = append(errs, fmt.Errorf("invalid --install-scope value %q: must be '%s', '%s', or '%s'", o.InstallScope, OutputAll, OutputCRDs, OutputResources))
@@ -204,6 +209,29 @@ func (o *Options) Validate() error {
 	errs = append(errs, o.validateHCPEgressBlockCIDRs()...)
 
 	return errors.NewAggregate(errs)
+}
+
+func (o *Options) effectiveFeatureSet() configv1.FeatureSet {
+	if o.FeatureSet == "Default" {
+		return configv1.Default
+	}
+	if o.FeatureSet != "" {
+		return configv1.FeatureSet(o.FeatureSet)
+	}
+	if o.TechPreviewNoUpgrade {
+		return configv1.TechPreviewNoUpgrade
+	}
+	return configv1.Default
+}
+
+func (o *Options) validateFeatureSet() error {
+	if !slices.Contains(configv1.AllFixedFeatureSets, o.effectiveFeatureSet()) {
+		return fmt.Errorf("invalid --feature-set %q: supported values are Default, TechPreviewNoUpgrade, DevPreviewNoUpgrade, OKD", o.FeatureSet)
+	}
+	if o.TechPreviewNoUpgrade && o.effectiveFeatureSet() != configv1.TechPreviewNoUpgrade {
+		return fmt.Errorf("--tech-preview-no-upgrade cannot be combined with --feature-set=%s", o.FeatureSet)
+	}
+	return nil
 }
 
 func (o *Options) validateHCPEgressBlockCIDRs() []error {
@@ -504,9 +532,8 @@ func NewCommand() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.EnableCPOOverrides, "enable-cpo-overrides", opts.EnableCPOOverrides, "If true, the HyperShift operator uses a set of static overrides for the CPO image given specific release versions")
 	cmd.PersistentFlags().BoolVar(&opts.EnableStandaloneKarpenterOperator, "enable-standalone-karpenter-operator", opts.EnableStandaloneKarpenterOperator, "If true, the HyperShift operator deploys the standalone karpenter-operator binary instead of the karpenter-operator embedded in the HO image (default false)")
 	cmd.PersistentFlags().StringVar(&opts.AroHCPKeyVaultUsersClientID, "aro-hcp-key-vault-users-client-id", opts.AroHCPKeyVaultUsersClientID, "The client ID of the managed identity which can access the Azure Key Vaults, in an AKS management cluster, to retrieve secrets and certificates.")
-	// TODO: Would it make sense to deprecate this flag in favor of a new flag like `--feature-set=TechPreviewNoUpgrade`
-	// and make it so that setting this flag is essentially equivalent to that?
 	cmd.PersistentFlags().BoolVar(&opts.TechPreviewNoUpgrade, "tech-preview-no-upgrade", opts.TechPreviewNoUpgrade, "If true, the HyperShift operator runs with TechPreviewNoUpgrade features enabled")
+	cmd.PersistentFlags().StringVar(&opts.FeatureSet, "feature-set", opts.FeatureSet, "Management-cluster feature set: Default, TechPreviewNoUpgrade, DevPreviewNoUpgrade, or OKD (preview sets do not support upgrades)")
 	cmd.PersistentFlags().StringVar(&opts.RegistryOverrides, "registry-overrides", "", "registry-overrides contains the source registry string as a key and the destination registry string as value. Images before being applied are scanned for the source registry string and if found the string is replaced with the destination registry string. Format is: sr1=dr1,sr2=dr2")
 	cmd.PersistentFlags().StringSliceVar(&opts.PlatformsToInstall, "limit-crd-install", opts.PlatformsToInstall, "Used to limit the CRDs that are installed to a per platform basis (example: --limit-crd-install=AWS,Azure). If this flag is not specified, all CRDs for all platforms will be installed. Valid, case-insensitive values are: AWS, Azure, IBMCloud, KubeVirt, Agent, OpenStack, GCP.")
 	cmd.PersistentFlags().StringToStringVar(&opts.AdditionalOperatorEnvVars, "additional-operator-env-vars", opts.AdditionalOperatorEnvVars, "Set of additional environment variables to be set on the HyperShift Operator deployment.")
@@ -909,7 +936,8 @@ func hyperShiftOperatorManifests(ctx context.Context, client crclient.Client, op
 	// Setup feature gate tech preview ConfigMap
 	techPreviewCM := assets.TechPreviewFeatureGateConfig{
 		Namespace:          opts.Namespace,
-		TechPreviewEnabled: strconv.FormatBool(opts.TechPreviewNoUpgrade),
+		TechPreviewEnabled: strconv.FormatBool(opts.effectiveFeatureSet() == configv1.TechPreviewNoUpgrade),
+		FeatureSet:         string(opts.effectiveFeatureSet()),
 	}.Build()
 	objects = append(objects, techPreviewCM)
 
@@ -964,7 +992,7 @@ var ipamCRDNames = set.New(
 //
 // Filters CRDs by:
 //   - ExcludeEtcdManifests: exclude etcd CRDs
-//   - TechPreviewNoUpgrade: include only CRDs with matching feature-set annotation
+//   - Feature set: include only CRDs with the selected feature-set annotation
 //   - PlatformsToInstall: include only platform-specific CRDs (awsendpointservices, azureprivatelinkservices, CAPI provider CRDs)
 //   - EnableAuditLogPersistence: include auditlogpersistence CRDs
 //   - ExternalDNSProvider: include external-dns CRDs only when provider uses --source=crd (currently google only)
@@ -984,18 +1012,12 @@ func crdIncludeFilter(opts Options, existingIPAMCRDs set.Set[string]) func(strin
 			if strings.Contains(path, "azureprivatelinkservices") {
 				return isAzurePlatformEnabled(opts.PlatformsToInstall)
 			}
-			if opts.TechPreviewNoUpgrade {
-				if featureSet, ok := crd.Annotations["release.openshift.io/feature-set"]; ok {
-					if featureSet != "TechPreviewNoUpgrade" {
-						return false
-					}
-				}
-			} else {
-				if featureSet, ok := crd.Annotations["release.openshift.io/feature-set"]; ok {
-					if featureSet != "Default" {
-						return false
-					}
-				}
+			selectedFeatureSet := string(opts.effectiveFeatureSet())
+			if selectedFeatureSet == string(configv1.Default) {
+				selectedFeatureSet = "Default"
+			}
+			if featureSet, ok := crd.Annotations["release.openshift.io/feature-set"]; ok && featureSet != selectedFeatureSet {
+				return false
 			}
 		}
 		if strings.Contains(path, "hypershift-operator/") {
@@ -1412,6 +1434,7 @@ func setupOperatorResources(opts Options, userCABundleCM *corev1.ConfigMap, trus
 		AdditionalOperatorEnvVars:               opts.AdditionalOperatorEnvVars,
 		AROHCPKeyVaultUsersClientID:             opts.AroHCPKeyVaultUsersClientID,
 		TechPreviewNoUpgrade:                    opts.TechPreviewNoUpgrade,
+		FeatureSet:                              string(opts.effectiveFeatureSet()),
 		RegistryOverrides:                       opts.RegistryOverrides,
 		PlatformsInstalled:                      strings.Join(opts.PlatformsToInstall, ","),
 		ImagePullPolicy:                         opts.ImagePullPolicy,

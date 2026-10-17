@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -513,16 +514,25 @@ func (o MonitoringDashboardTemplate) Build() *corev1.ConfigMap {
 type TechPreviewFeatureGateConfig struct {
 	Namespace          string
 	TechPreviewEnabled string
+	FeatureSet         string
 }
 
 func (o TechPreviewFeatureGateConfig) Build() *corev1.ConfigMap {
+	featureSet := o.FeatureSet
+	if featureSet == "" {
+		featureSet = "Default"
+		if o.TechPreviewEnabled == "true" {
+			featureSet = string(configv1.TechPreviewNoUpgrade)
+		}
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "feature-gate",
 			Namespace: o.Namespace,
 		},
 		Data: map[string]string{
-			"TechPreviewEnabled": o.TechPreviewEnabled,
+			"TechPreviewEnabled": strconv.FormatBool(featureSet == string(configv1.TechPreviewNoUpgrade)),
+			"FeatureSet":         featureSet,
 		},
 	}
 }
@@ -571,6 +581,7 @@ type HyperShiftOperatorDeployment struct {
 	AdditionalOperatorEnvVars               map[string]string
 	AROHCPKeyVaultUsersClientID             string
 	TechPreviewNoUpgrade                    bool
+	FeatureSet                              string
 	RegistryOverrides                       string
 	PlatformsInstalled                      string
 	ImagePullPolicy                         string
@@ -852,6 +863,12 @@ func (o HyperShiftOperatorDeployment) buildEnvVars() []corev1.EnvVar {
 		},
 	}
 
+	if o.FeatureSet != "" && o.FeatureSet != "Default" {
+		envVars = append(envVars, corev1.EnvVar{Name: "HYPERSHIFT_FEATURESET", Value: o.FeatureSet})
+	} else if o.TechPreviewNoUpgrade {
+		envVars = append(envVars, corev1.EnvVar{Name: "HYPERSHIFT_FEATURESET", Value: string(configv1.TechPreviewNoUpgrade)})
+	}
+
 	for key, value := range o.AdditionalOperatorEnvVars {
 		trimmedKey := strings.TrimSpace(key)
 		trimmedValue := strings.TrimSpace(value)
@@ -867,9 +884,6 @@ func (o HyperShiftOperatorDeployment) buildEnvVars() []corev1.EnvVar {
 		}
 	}
 
-	if o.TechPreviewNoUpgrade {
-		envVars = append(envVars, corev1.EnvVar{Name: "HYPERSHIFT_FEATURESET", Value: string(configv1.TechPreviewNoUpgrade)})
-	}
 	if o.EnableAuditLogPersistence {
 		envVars = append(envVars, corev1.EnvVar{Name: "ENABLE_AUDIT_LOG_PERSISTENCE", Value: "true"})
 	}

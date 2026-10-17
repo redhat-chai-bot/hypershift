@@ -48,14 +48,18 @@ func (o *RawCreateOptions) Validate(ctx context.Context, opts *core.CreateOption
 	if o.ServicePublishingStrategy != NodePortServicePublishingStrategy && o.ServicePublishingStrategy != LoadBalancerServicePublishingStrategy {
 		return nil, fmt.Errorf("service publishing strategy %s is not supported, supported options: %s, %s", o.ServicePublishingStrategy, NodePortServicePublishingStrategy, LoadBalancerServicePublishingStrategy)
 	}
-	if o.ServicePublishingStrategy != NodePortServicePublishingStrategy && o.APIServerAddress != "" {
+	publishingNodePort := opts != nil && (opts.PublishingType == "NodePort" || (opts.PublishingType == "SingleIngressPoint" && opts.PublishingExposure == "NodePort"))
+	if o.ServicePublishingStrategy != NodePortServicePublishingStrategy && o.APIServerAddress != "" && !publishingNodePort {
 		return nil, fmt.Errorf("--api-server-address is supported only for NodePort service publishing strategy, service publishing strategy %s is used", o.ServicePublishingStrategy)
 	}
-	if o.APIServerAddress == "" && o.ServicePublishingStrategy == NodePortServicePublishingStrategy && !opts.Render {
+	if o.APIServerAddress == "" && (((opts == nil || opts.PublishingType == "") && o.ServicePublishingStrategy == NodePortServicePublishingStrategy) || (publishingNodePort && opts.PublishingAddress == "")) && !opts.Render {
 		var err error
 		if o.APIServerAddress, err = core.GetAPIServerAddressByNode(ctx, opts.Log, opts.Kubeconfig); err != nil {
 			return nil, err
 		}
+	}
+	if publishingNodePort && opts.PublishingAddress == "" {
+		opts.PublishingAddress = o.APIServerAddress
 	}
 
 	return &ValidatedCreateOptions{

@@ -15,6 +15,7 @@
         "featureGates": [
             {
                 "disabled": [
+                    {"name": "ServicePublishingAPI"},
                     {
                       "name": "AROHCPManagedIdentities"
                     },

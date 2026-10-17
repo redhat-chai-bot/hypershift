@@ -940,6 +940,22 @@ func TestBuildEnvVars(t *testing.T) {
 		expectAbsent   []string
 	}{
 		{
+			name: "When DevPreviewNoUpgrade is selected, it should include HYPERSHIFT_FEATURESET env var",
+			deployment: HyperShiftOperatorDeployment{
+				FeatureSet: string(configv1.DevPreviewNoUpgrade),
+			},
+			expectContains: []corev1.EnvVar{
+				{Name: "HYPERSHIFT_FEATURESET", Value: string(configv1.DevPreviewNoUpgrade)},
+			},
+		},
+		{
+			name: "When Default is selected, it should omit HYPERSHIFT_FEATURESET env var",
+			deployment: HyperShiftOperatorDeployment{
+				FeatureSet: "Default",
+			},
+			expectAbsent: []string{"HYPERSHIFT_FEATURESET"},
+		},
+		{
 			name: "When TechPreviewNoUpgrade is enabled, it should include HYPERSHIFT_FEATURESET env var",
 			deployment: HyperShiftOperatorDeployment{
 				TechPreviewNoUpgrade: true,

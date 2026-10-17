@@ -9676,6 +9676,252 @@ spec:
                 required:
                 - type
                 type: object
+              publishing:
+                description: |-
+                  publishing selects a supported control plane topology, mutually exclusive with services.
+                  Once set, the complete policy is immutable and cannot be removed.
+                properties:
+                  dedicatedAPIServerEndpoint:
+                    description: |-
+                      dedicatedAPIServerEndpoint configures optional endpoint overrides.
+                      An empty object selects the preset without overriding any endpoint, so it is a pointer:
+                      the empty object and the absent field are distinct, deliberate user choices.
+                    minProperties: 0
+                    properties:
+                      services:
+                        description: |-
+                          services configures endpoint overrides. Omitted endpoints use their assigned or derived names.
+                          An empty list is equivalent to omitting the field, so the minimum number of items is explicitly zero.
+                        items:
+                          description: DedicatedAPIServerEndpointService configures
+                            an API or OAuth endpoint override.
+                          properties:
+                            exposure:
+                              description: exposure optionally gives OAuthServer a
+                                dedicated LoadBalancer.
+                              enum:
+                              - DedicatedLoadBalancer
+                              maxLength: 24
+                              type: string
+                            hostname:
+                              description: hostname overrides the DNS name; omission
+                                preserves assigned or derived names.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                              x-kubernetes-validations:
+                              - message: hostname must be a valid DNS subdomain
+                                rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              maxLength: 16
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        maxItems: 2
+                        minItems: 0
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exposure override is only valid for OAuthServer
+                      rule: '!has(self.services) || self.services.all(s, !has(s.exposure)
+                        || s.name == ''OAuthServer'')'
+                  nodePort:
+                    description: nodePort configures direct service exposure on management
+                      nodes.
+                    properties:
+                      address:
+                        description: address is a reachable hostname, IPv4, or IPv6
+                          address.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                        x-kubernetes-validations:
+                        - message: address must be a valid hostname, IPv4, or IPv6
+                            address
+                          rule: isIP(self) || (self.lowerAscii().contains(':ffff:')
+                            && isIP(self.lowerAscii().replace(':ffff:', ':fffe:')))
+                            || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            && !self.matches('^[0-9]+(\\.[0-9]+){3}$'))
+                      services:
+                        description: |-
+                          services configures optional per-service port overrides.
+                          An empty list is equivalent to omitting the field, so the minimum number of items is explicitly zero.
+                        items:
+                          description: NodePortPublishedService selects an optional
+                            NodePort for a service.
+                          properties:
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              - Konnectivity
+                              - Ignition
+                              maxLength: 16
+                              type: string
+                            port:
+                              description: port selects a NodePort; omitted ports
+                                are allocated by Kubernetes.
+                              format: int32
+                              maximum: 32767
+                              minimum: 30000
+                              type: integer
+                          required:
+                          - name
+                          type: object
+                        maxItems: 4
+                        minItems: 0
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - address
+                    type: object
+                    x-kubernetes-validations:
+                    - message: explicit port values must be unique across services
+                      rule: '!has(self.services) || self.services.all(x, !has(x.port)
+                        || self.services.filter(y, has(y.port) && y.port == x.port).size()
+                        == 1)'
+                  singleIngressPoint:
+                    description: singleIngressPoint configures the shared control
+                      plane ingress.
+                    properties:
+                      exposure:
+                        description: exposure selects how the shared ingress point
+                          is reached.
+                        enum:
+                        - LoadBalancer
+                        - NodePort
+                        - PlatformProvided
+                        maxLength: 16
+                        type: string
+                      loadBalancer:
+                        description: loadBalancer configures the router LoadBalancer;
+                          an empty object uses its assigned address.
+                        minProperties: 0
+                        properties:
+                          hostname:
+                            description: hostname overrides the router LoadBalancer
+                              DNS name.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                            x-kubernetes-validations:
+                            - message: hostname must be a valid DNS subdomain
+                              rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                        type: object
+                      nodePort:
+                        description: nodePort configures the router NodePort.
+                        properties:
+                          address:
+                            description: address is a reachable hostname, IPv4, or
+                              IPv6 address.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                            x-kubernetes-validations:
+                            - message: address must be a valid hostname, IPv4, or
+                                IPv6 address
+                              rule: isIP(self) || (self.lowerAscii().contains(':ffff:')
+                                && isIP(self.lowerAscii().replace(':ffff:', ':fffe:')))
+                                || (self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                                && !self.matches('^[0-9]+(\\.[0-9]+){3}$'))
+                          port:
+                            description: port selects a NodePort; omitted ports are
+                              allocated by Kubernetes.
+                            format: int32
+                            maximum: 32767
+                            minimum: 30000
+                            type: integer
+                        required:
+                        - address
+                        type: object
+                      services:
+                        description: services configures optional hostnames and OAuth
+                          exposure. APIServer is required.
+                        items:
+                          description: SingleIngressPointService configures a service
+                            endpoint behind the shared ingress point.
+                          properties:
+                            exposure:
+                              description: exposure optionally gives OAuthServer a
+                                dedicated LoadBalancer.
+                              enum:
+                              - DedicatedLoadBalancer
+                              maxLength: 24
+                              type: string
+                            hostname:
+                              description: hostname overrides the endpoint DNS name;
+                                required for APIServer, otherwise derived when omitted.
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                              x-kubernetes-validations:
+                              - message: hostname must be a valid DNS subdomain
+                                rule: self.matches('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$')
+                            name:
+                              description: name identifies the service.
+                              enum:
+                              - APIServer
+                              - OAuthServer
+                              - Konnectivity
+                              - Ignition
+                              maxLength: 16
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        maxItems: 4
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                    required:
+                    - exposure
+                    - services
+                    type: object
+                    x-kubernetes-validations:
+                    - message: SingleIngressPoint requires an APIServer entry with
+                        a hostname
+                      rule: self.services.exists(s, s.name == 'APIServer' && has(s.hostname))
+                    - message: exposure override is only valid for OAuthServer
+                      rule: self.services.all(s, !has(s.exposure) || s.name == 'OAuthServer')
+                    - message: loadBalancer must match ingress exposure
+                      rule: 'self.exposure == ''LoadBalancer'' ? has(self.loadBalancer)
+                        : !has(self.loadBalancer)'
+                    - message: nodePort must match ingress exposure
+                      rule: 'self.exposure == ''NodePort'' ? has(self.nodePort) :
+                        !has(self.nodePort)'
+                  type:
+                    description: type selects the publishing topology.
+                    enum:
+                    - SingleIngressPoint
+                    - DedicatedAPIServerEndpoint
+                    - NodePort
+                    maxLength: 32
+                    type: string
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: singleIngressPoint must match the publishing type
+                  rule: 'self.type == ''SingleIngressPoint'' ? has(self.singleIngressPoint)
+                    : !has(self.singleIngressPoint)'
+                - message: nodePort must match the publishing type
+                  rule: 'self.type == ''NodePort'' ? has(self.nodePort) : !has(self.nodePort)'
+                - message: dedicatedAPIServerEndpoint is forbidden for other publishing
+                    types
+                  rule: self.type == 'DedicatedAPIServerEndpoint' || !has(self.dedicatedAPIServerEndpoint)
               pullSecret:
                 description: |-
                   pullSecret is a local reference to a Secret that must have a ".dockerconfigjson" key whose content must be a valid Openshift pull secret JSON.
@@ -10173,12 +10419,15 @@ spec:
                   services specifies how individual control plane services endpoints are published for consumption.
                   This requires APIServer;OAuthServer;Konnectivity;Ignition.
                   This field is immutable for all platforms but IBMCloud.
+                  Deprecated: use publishing for new clusters or migrate atomically by clearing services.
                   Max is 6 to account for OIDC;OVNSbDb for backward compatibility though they are no-op.
 
                   -kubebuilder:validation:XValidation:rule="self.all(s, !(s.service == 'APIServer' && s.servicePublishingStrategy.type == 'Route') || has(s.servicePublishingStrategy.route.hostname))",message="If serviceType is 'APIServer' and publishing strategy is 'Route', then hostname must be set"
                   -kubebuilder:validation:XValidation:rule="self.platform.type == 'IBMCloud' ? ['APIServer', 'OAuthServer', 'Konnectivity'].all(requiredType, self.exists(s, s.service == requiredType))",message="Services list must contain at least 'APIServer', 'OAuthServer', and 'Konnectivity' service types" : ['APIServer', 'OAuthServer', 'Konnectivity', 'Ignition'].all(requiredType, self.exists(s, s.service == requiredType))",message="Services list must contain at least 'APIServer', 'OAuthServer', 'Konnectivity', and 'Ignition' service types"
                   -kubebuilder:validation:XValidation:rule="self.filter(s, s.servicePublishingStrategy.type == 'Route' && has(s.servicePublishingStrategy.route) && has(s.servicePublishingStrategy.route.hostname)).all(x, self.filter(y, y.servicePublishingStrategy.type == 'Route' && (has(y.servicePublishingStrategy.route) && has(y.servicePublishingStrategy.route.hostname) && y.servicePublishingStrategy.route.hostname == x.servicePublishingStrategy.route.hostname)).size() <= 1)",message="Each route publishingStrategy 'hostname' must be unique within the Services list."
                   -kubebuilder:validation:XValidation:rule="self.filter(s, s.servicePublishingStrategy.type == 'NodePort' && has(s.servicePublishingStrategy.nodePort) && has(s.servicePublishingStrategy.nodePort.address) && has(s.servicePublishingStrategy.nodePort.port)).all(x, self.filter(y, y.servicePublishingStrategy.type == 'NodePort' && (has(y.servicePublishingStrategy.nodePort) && has(y.servicePublishingStrategy.nodePort.address) && y.servicePublishingStrategy.nodePort.address == x.servicePublishingStrategy.nodePort.address && has(y.servicePublishingStrategy.nodePort.port) && y.servicePublishingStrategy.nodePort.port == x.servicePublishingStrategy.nodePort.port )).size() <= 1)",message="Each nodePort publishingStrategy 'nodePort' and 'hostname' must be unique within the Services list."
+                  An empty list stays valid for compatibility with objects that publish through spec.publishing,
+                  so the minimum number of items is explicitly zero.
                 items:
                   description: |-
                     ServicePublishingStrategyMapping specifies how individual control plane services endpoints are published for consumption.
@@ -10300,6 +10549,7 @@ spec:
                   - servicePublishingStrategy
                   type: object
                 maxItems: 6
+                minItems: 0
                 type: array
               sshKey:
                 description: |-
@@ -10377,56 +10627,129 @@ spec:
             - platform
             - pullSecret
             - release
-            - services
             type: object
             x-kubernetes-validations:
-            - message: spec.services in body should have at least 4 items or 3 for
-                IBMCloud
-              rule: 'self.platform.type == ''IBMCloud'' ? size(self.services) >= 3
-                : size(self.services) >= 4'
-            - message: Services is immutable. Changes might result in unpredictable
-                and disruptive behavior.
-              rule: 'self.platform.type != "IBMCloud" ? self.services == oldSelf.services
-                : true'
-            - message: Azure managed platform (ARO HCP) requires OAuthServer to use
-                Route
-              rule: self.platform.type != "Azure" || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.orValue("")
-                == "WorkloadIdentities" || self.services.exists(s, s.service == "OAuthServer"
-                && s.servicePublishingStrategy.type == "Route")
-            - message: Self-managed Azure requires OAuthServer to use Route or LoadBalancer
-              rule: self.platform.type != "Azure" || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.orValue("")
-                != "WorkloadIdentities" || self.services.exists(s, s.service == "OAuthServer"
-                && (s.servicePublishingStrategy.type == "Route" || s.servicePublishingStrategy.type
-                == "LoadBalancer"))
-            - message: Azure platform requires Konnectivity to use Route service publishing
-                strategy
-              rule: 'self.platform.type == "Azure" ? self.services.exists(s, s.service
-                == "Konnectivity" && s.servicePublishingStrategy.type == "Route")
-                : true'
-            - message: Azure platform requires Ignition to use Route service publishing
-                strategy
-              rule: 'self.platform.type == "Azure" ? self.services.exists(s, s.service
-                == "Ignition" && s.servicePublishingStrategy.type == "Route") : true'
-            - message: If serviceAccountSigningKey is set, issuerURL must be set
-              rule: has(self.issuerURL) || !has(self.serviceAccountSigningKey)
-            - message: APIServer loadBalancer hostname cannot be in ClusterConfiguration.apiserver.servingCerts.namedCertificates[]
-              rule: '!self.services.exists(s, s.service == ''APIServer'' && has(s.servicePublishingStrategy.loadBalancer)
-                && s.servicePublishingStrategy.loadBalancer.hostname != "" && has(self.configuration)
-                && has(self.configuration.apiServer) && has(self.configuration.apiServer.servingCerts)
-                && has(self.configuration.apiServer.servingCerts.namedCertificates)
-                && self.configuration.apiServer.servingCerts.namedCertificates.exists(cert,
-                has(cert.names) && cert.names.exists(n, n == s.servicePublishingStrategy.loadBalancer.hostname)))'
+            - message: spec.publishing is immutable
+              rule: '!has(oldSelf.publishing) || !has(self.publishing) || self.publishing
+                == oldSelf.publishing'
+            - message: spec.publishing cannot be removed once set
+              rule: '!has(oldSelf.publishing) || has(self.publishing)'
+            - message: secretEncryption cannot be removed once configured
+              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
             - message: disableMultiNetwork can only be set to true when networkType
                 is 'Other'
               rule: '!has(self.operatorConfiguration) || !has(self.operatorConfiguration.clusterNetworkOperator)
                 || !has(self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork)
                 || !self.operatorConfiguration.clusterNetworkOperator.disableMultiNetwork
                 || self.networking.networkType == ''Other'''
+            - message: this cloud platform requires SingleIngressPoint or DedicatedAPIServerEndpoint
+              rule: '!has(self.publishing) || !(self.platform.type in [''AWS'', ''Azure'',
+                ''GCP'', ''PowerVS'']) || self.publishing.type in [''SingleIngressPoint'',
+                ''DedicatedAPIServerEndpoint'']'
+            - message: spec.publishing and spec.services are mutually exclusive
+              rule: '!has(self.publishing) || !has(self.services) || size(self.services)
+                == 0'
+            - message: AWS Private requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''AWS'' || (!self.platform.?aws.endpointAccess.hasValue()
+                || self.platform.?aws.endpointAccess.value() != ''Private'') || self.publishing.type
+                == ''SingleIngressPoint'''
+            - message: ARO HCP requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''Azure'' || (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities'') || self.publishing.type == ''SingleIngressPoint'''
+            - message: Azure Private requires SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''Azure'' || (!self.platform.?azure.topology.hasValue()
+                || self.platform.?azure.topology.value() != ''Private'') || self.publishing.type
+                == ''SingleIngressPoint'''
+            - message: IBMCloud requires NodePort or PlatformProvided SingleIngressPoint
+              rule: '!has(self.publishing) || self.platform.type != ''IBMCloud'' ||
+                self.publishing.type == ''NodePort'' || (self.publishing.type == ''SingleIngressPoint''
+                && self.publishing.singleIngressPoint.exposure == ''PlatformProvided'')'
+            - message: OpenStack requires DedicatedAPIServerEndpoint
+              rule: '!has(self.publishing) || self.platform.type != ''OpenStack''
+                || self.publishing.type == ''DedicatedAPIServerEndpoint'''
+            - message: APIServer LoadBalancer hostname cannot be in namedCertificates
+              rule: '!has(self.publishing) || self.publishing.type != ''DedicatedAPIServerEndpoint''
+                || !has(self.publishing.dedicatedAPIServerEndpoint) || !has(self.publishing.dedicatedAPIServerEndpoint.services)
+                || !has(self.configuration) || !has(self.configuration.apiServer)
+                || !has(self.configuration.apiServer.servingCerts) || !has(self.configuration.apiServer.servingCerts.namedCertificates)
+                || !self.publishing.dedicatedAPIServerEndpoint.services.exists(s,
+                s.name == ''APIServer'' && has(s.hostname) && self.configuration.apiServer.servingCerts.namedCertificates.exists(cert,
+                has(cert.names) && cert.names.exists(n, n == s.hostname)))'
+            - message: OAuth dedicated LoadBalancer requires Azure self-managed
+              rule: '!has(self.publishing) || self.publishing.type != ''DedicatedAPIServerEndpoint''
+                || !has(self.publishing.dedicatedAPIServerEndpoint) || !has(self.publishing.dedicatedAPIServerEndpoint.services)
+                || self.publishing.dedicatedAPIServerEndpoint.services.all(s, !has(s.exposure))
+                || (self.platform.type == ''Azure'' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities''))'
+            - message: SingleIngressPoint NodePort exposure requires Agent, KubeVirt,
+                or None
+              rule: '!has(self.publishing) || self.publishing.type != ''SingleIngressPoint''
+                || self.publishing.singleIngressPoint.exposure != ''NodePort'' ||
+                self.platform.type in [''Agent'', ''KubeVirt'', ''None'']'
+            - message: OAuth dedicated LoadBalancer requires Azure self-managed
+              rule: '!has(self.publishing) || self.publishing.type != ''SingleIngressPoint''
+                || self.publishing.singleIngressPoint.services.all(s, !has(s.exposure))
+                || (self.platform.type == ''Azure'' && (!self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.hasValue()
+                || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.value()
+                != ''ManagedIdentities''))'
+            - message: APIServer loadBalancer hostname cannot be in ClusterConfiguration.apiserver.servingCerts.namedCertificates[]
+              rule: '!has(self.services) || !self.services.exists(s, s.service ==
+                ''APIServer'' && has(s.servicePublishingStrategy.loadBalancer) &&
+                s.servicePublishingStrategy.loadBalancer.hostname != "" && has(self.configuration)
+                && has(self.configuration.apiServer) && has(self.configuration.apiServer.servingCerts)
+                && has(self.configuration.apiServer.servingCerts.namedCertificates)
+                && self.configuration.apiServer.servingCerts.namedCertificates.exists(cert,
+                has(cert.names) && cert.names.exists(n, n == s.servicePublishingStrategy.loadBalancer.hostname)))'
+            - message: spec.services in body should have at least 4 items or 3 for
+                IBMCloud
+              rule: '!has(self.services) || size(self.services) == 0 || (self.platform.type
+                == ''IBMCloud'' ? size(self.services) >= 3 : size(self.services) >=
+                4)'
+            - message: Self-managed Azure requires OAuthServer to use Route or LoadBalancer
+              rule: '!has(self.services) || size(self.services) == 0 || self.platform.type
+                != "Azure" || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.orValue("")
+                != "WorkloadIdentities" || self.services.exists(s, s.service == "OAuthServer"
+                && (s.servicePublishingStrategy.type == "Route" || s.servicePublishingStrategy.type
+                == "LoadBalancer"))'
+            - message: Azure managed platform (ARO HCP) requires OAuthServer to use
+                Route
+              rule: '!has(self.services) || size(self.services) == 0 || self.platform.type
+                != "Azure" || self.platform.?azure.azureAuthenticationConfig.azureAuthenticationConfigType.orValue("")
+                == "WorkloadIdentities" || self.services.exists(s, s.service == "OAuthServer"
+                && s.servicePublishingStrategy.type == "Route")'
+            - message: Azure platform requires Ignition to use Route service publishing
+                strategy
+              rule: '!has(self.services) || size(self.services) == 0 || self.platform.type
+                != "Azure" || self.services.exists(s, s.service == "Ignition" && s.servicePublishingStrategy.type
+                == "Route")'
+            - message: Azure platform requires Konnectivity to use Route service publishing
+                strategy
+              rule: '!has(self.services) || size(self.services) == 0 || self.platform.type
+                != "Azure" || self.services.exists(s, s.service == "Konnectivity"
+                && s.servicePublishingStrategy.type == "Route")'
+            - message: If serviceAccountSigningKey is set, issuerURL must be set
+              rule: has(self.issuerURL) || !has(self.serviceAccountSigningKey)
+            - message: spec.publishing or non-empty spec.services is required
+              rule: has(self.publishing) || (has(self.services) && size(self.services)
+                > 0)
             - message: ovnKubernetesConfig is forbidden when networkType is not OVNKubernetes
               rule: self.networking.networkType == 'OVNKubernetes' || !has(self.operatorConfiguration)
                 || !has(self.operatorConfiguration.clusterNetworkOperator) || !has(self.operatorConfiguration.clusterNetworkOperator.ovnKubernetesConfig)
-            - message: secretEncryption cannot be removed once configured
-              rule: '!has(oldSelf.secretEncryption) || has(self.secretEncryption)'
+            - message: Services is immutable except when cleared during migration
+                to publishing
+              rule: self.platform.type == 'IBMCloud' || (has(self.services) && has(oldSelf.services)
+                && self.services == oldSelf.services) || (!has(self.services) && !has(oldSelf.services))
+                || !has(self.services) || size(self.services) == 0
+            - message: spec.services is immutable; migrate by setting publishing and
+                clearing services atomically
+              rule: self.platform.type == 'IBMCloud' || (has(self.services) && has(oldSelf.services)
+                && self.services == oldSelf.services) || ((!has(self.services) ||
+                size(self.services) == 0) && (!has(oldSelf.services) || size(oldSelf.services)
+                == 0)) || (has(oldSelf.services) && size(oldSelf.services) > 0 &&
+                !has(oldSelf.publishing) && has(self.publishing) && (!has(self.services)
+                || size(self.services) == 0))
           status:
             description: status is the latest observed status of the HostedCluster.
             properties:
