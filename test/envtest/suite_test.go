@@ -86,6 +86,7 @@ var _ = AfterSuite(func() {
 var _ = Describe("CRD Installation", func() {
 	GenerateCRDInstallTest("Default")
 	GenerateCRDInstallTest("TechPreviewNoUpgrade")
+	GenerateCRDInstallTest("DevPreviewNoUpgrade")
 })
 
 var _ = Describe("", func() {

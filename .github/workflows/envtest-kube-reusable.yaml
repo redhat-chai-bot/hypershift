@@ -39,7 +39,16 @@ jobs:
             exit 0
           fi
           echo "Diff ref: $ref"
-          pattern='^(api/|test/envtest/|cmd/install/assets/crds/|karpenter-operator/controllers/karpenter/assets/tests/|hack/tools/|\.github/workflows/envtest-kube(-reusable)?\.yaml$)'
+          # The envtest-tagged suites outside test/envtest (hypershift-operator/controllers/hostedcluster
+          # and cmd/cluster/core, see ENVTEST_PACKAGES in the Makefile) assert directly against the
+          # publishing translation layer, the netutil visibility helpers and the feature gate, so those
+          # directories have to trigger the matrix too; otherwise a PR touching only the translation
+          # layer would skip the tests that guard it.
+          # Trigger-rate note: adding the controller and its dependencies raises how often both 7-job
+          # matrices fire (measured over 6 months of main: 569 -> ~854 of 4506 commits). Accepted
+          # deliberately, because ENVTEST_PACKAGES is non-recursive, so the marginal job only adds the
+          # tagged suites rather than re-running the whole controller subtree.
+          pattern='^(api/|test/envtest/|hypershift-operator/controllers/hostedcluster/|hypershift-operator/featuregate/|cmd/cluster/core/|support/publishing/|support/netutil/|cmd/install/assets/crds/|karpenter-operator/controllers/karpenter/assets/tests/|hack/tools/|\.github/workflows/envtest-kube(-reusable)?\.yaml$)'
           diff_output=$(git diff --name-only "$ref" 2>/dev/null)
           diff_rc=$?
           if [ $diff_rc -ne 0 ]; then
@@ -60,7 +69,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: arc-runner-set
-    timeout-minutes: 20
+    # The envtest-tagged admission suites and the extra DevPreviewNoUpgrade CRD install add a few
+    # minutes per job on top of the existing test/envtest baseline, so the previous 20-minute cap no
+    # longer leaves useful headroom.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

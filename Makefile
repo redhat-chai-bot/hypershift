@@ -462,6 +462,16 @@ ENVTEST_OCP_K8S_VERSIONS ?= 1.30.3 1.31.2 1.32.1 1.33.2 1.34.1 1.35.1 1.36.2
 # Vanilla Kubernetes versions for envtest (upstream kubebuilder assets)
 ENVTEST_KUBE_VERSIONS ?= 1.31.0 1.32.0 1.33.0 1.34.0 1.35.0 1.36.0 1.37.0
 
+# Packages whose tests need an envtest API server. test/envtest holds the YAML-driven CRD suites;
+# the hostedcluster package holds the envtest-tagged admission and CEL ratcheting tests, which run
+# the real HostedCluster -> HostedControlPlane parent and therefore cannot live in test/envtest;
+# cmd/cluster/core holds the envtest-tagged admission test for the CLI-rendered HostedCluster.
+# Without these entries those tests are built by `make vet` but executed by no CI job.
+# The two package entries are deliberately non-recursive: build tags exclude files, never packages,
+# so a `/...` selector would also re-run every untagged test in the subtree (208 functions under
+# hostedcluster alone) in each of the 14 matrix jobs, duplicating the unit shards for no new signal.
+ENVTEST_PACKAGES ?= ./test/envtest/... ./hypershift-operator/controllers/hostedcluster ./cmd/cluster/core
+
 # Parallel envtest execution: 0 = sequential (default), N = N parallel jobs, MAX = all versions in parallel.
 ENVTEST_JOBS ?= 0
 
@@ -471,7 +481,7 @@ _run-single-envtest-%:
 	@log=$$(mktemp); \
 	echo "=== Running envtest for K8s $* ===" > "$$log"; \
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use --use-env --bin-dir $(ENVTEST_BIN_DIR) -p path $(ENVTEST_INDEX_FLAG) $*)" \
-	$(GO) test -tags envtest -race -count=1 -timeout=30m ./test/envtest/... >> "$$log" 2>&1; \
+	$(GO) test -tags envtest -race -count=1 -timeout=30m $(ENVTEST_PACKAGES) >> "$$log" 2>&1; \
 	rc=$$?; \
 	cat "$$log"; \
 	rm -f "$$log"; \
@@ -483,7 +493,7 @@ ifeq ($(ENVTEST_JOBS),0)
 	@for k8s_ver in $(ENVTEST_OCP_K8S_VERSIONS); do \
 		echo "=== Running envtest for OCP (K8s $$k8s_ver) ==="; \
 		KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use --use-env --bin-dir $(ENVTEST_OCP_ASSETS_DIR) -p path --index $(ENVTEST_OCP_INDEX) $$k8s_ver)" \
-		$(GO) test -tags envtest -race -count=1 -timeout=30m ./test/envtest/... || exit 1; \
+		$(GO) test -tags envtest -race -count=1 -timeout=30m $(ENVTEST_PACKAGES) || exit 1; \
 	done
 	@echo "=== All OCP envtest versions passed ==="
 else
@@ -514,7 +524,7 @@ ifeq ($(ENVTEST_JOBS),0)
 	@for k8s_ver in $(ENVTEST_KUBE_VERSIONS); do \
 		echo "=== Running envtest for Kubernetes $$k8s_ver ==="; \
 		KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use --use-env --bin-dir $(ENVTEST_KUBE_ASSETS_DIR) -p path $$k8s_ver)" \
-		$(GO) test -tags envtest -race -count=1 -timeout=30m ./test/envtest/... || exit 1; \
+		$(GO) test -tags envtest -race -count=1 -timeout=30m $(ENVTEST_PACKAGES) || exit 1; \
 	done
 	@echo "=== All Kubernetes envtest versions passed ==="
 else
