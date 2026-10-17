@@ -436,6 +436,65 @@ func TestBaseDomainFromServices(t *testing.T) {
 	}
 }
 
+func TestReconcileAzurePrivateLinkService(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		publishing hyperv1.ServicePublishing
+		legacy     []hyperv1.ServicePublishingStrategyMapping
+		wantDomain string
+		wantError  bool
+	}{
+		{
+			name: "When publishing is the only source, it should derive private DNS from the OAuth hostname",
+			publishing: hyperv1.ServicePublishing{Type: hyperv1.ServicePublishingSingleIngressPoint, SingleIngressPoint: hyperv1.SingleIngressPointPublishing{
+				Exposure: hyperv1.IngressExposureLoadBalancer, LoadBalancer: &hyperv1.IngressLoadBalancerConfig{},
+				Services: []hyperv1.SingleIngressPointService{{Name: hyperv1.IngressServiceName(hyperv1.APIServer), Hostname: "api-test-hcp.control.example.com"}, {Name: hyperv1.IngressServiceName(hyperv1.OAuthServer), Hostname: "oauth-test-hcp.control.example.com"}},
+			}},
+			wantDomain: "control.example.com",
+		},
+		{
+			name: "When legacy OAuth hostname disagrees with publishing, it should retain authoritative private DNS",
+			publishing: hyperv1.ServicePublishing{Type: hyperv1.ServicePublishingSingleIngressPoint, SingleIngressPoint: hyperv1.SingleIngressPointPublishing{
+				Exposure: hyperv1.IngressExposureLoadBalancer, LoadBalancer: &hyperv1.IngressLoadBalancerConfig{},
+				Services: []hyperv1.SingleIngressPointService{{Name: hyperv1.IngressServiceName(hyperv1.APIServer), Hostname: "api-test-hcp.control.example.com"}, {Name: hyperv1.IngressServiceName(hyperv1.OAuthServer), Hostname: "oauth-test-hcp.control.example.com"}},
+			}},
+			legacy:     []hyperv1.ServicePublishingStrategyMapping{{Service: hyperv1.OAuthServer, ServicePublishingStrategy: hyperv1.ServicePublishingStrategy{Type: hyperv1.Route, Route: &hyperv1.RoutePublishingStrategy{Hostname: "oauth-test-hcp.legacy.example.com"}}}},
+			wantDomain: "legacy.example.com",
+		},
+		{name: "When service hostnames are absent, it should retain the cluster DNS base domain", wantDomain: "cluster.example.com"},
+		{name: "When publishing is invalid without legacy services, it should report translation failure", publishing: hyperv1.ServicePublishing{Type: "Unsupported"}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			g := NewWithT(t)
+			scheme := runtime.NewScheme()
+			g.Expect(hyperv1.AddToScheme(scheme)).To(Succeed())
+			c := fake.NewClientBuilder().WithScheme(scheme).Build()
+			hcp := &hyperv1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-hcp", Namespace: "clusters-test-hcp", UID: "test-hcp-uid"},
+				Spec: hyperv1.HostedControlPlaneSpec{
+					Platform: hyperv1.PlatformSpec{Type: hyperv1.AzurePlatform, Azure: &hyperv1.AzurePlatformSpec{Topology: hyperv1.AzureTopologyPrivate, Private: hyperv1.AzurePrivateSpec{Type: hyperv1.AzurePrivateTypePrivateLink}}},
+					DNS:      hyperv1.DNSSpec{BaseDomain: "cluster.example.com"}, Publishing: test.publishing, Services: test.legacy,
+				},
+			}
+			r := &AzurePrivateLinkServiceObserver{Client: c, ServiceName: "private-router", HCPNamespace: hcp.Namespace, CreateOrUpdateProvider: &mockCreateOrUpdateProvider{client: c}}
+			err := r.reconcileAzurePrivateLinkService(context.Background(), hcp, "10.0.0.100")
+			if test.wantError {
+				g.Expect(err).To(MatchError(ContainSubstring("invalid service publishing configuration")))
+				return
+			}
+			g.Expect(err).NotTo(HaveOccurred())
+			pls := &hyperv1.AzurePrivateLinkService{}
+			g.Expect(c.Get(context.Background(), types.NamespacedName{Name: "private-router", Namespace: hcp.Namespace}, pls)).To(Succeed())
+			g.Expect(pls.Spec.BaseDomain).To(Equal(test.wantDomain))
+			g.Expect(pls.OwnerReferences).To(HaveLen(1))
+			g.Expect(pls.OwnerReferences[0].UID).To(Equal(hcp.UID))
+		})
+	}
+}
+
 func TestReconcile_WhenServiceNotFound_ItShouldReturnNoError(t *testing.T) {
 	t.Parallel()
 	g := NewGomegaWithT(t)

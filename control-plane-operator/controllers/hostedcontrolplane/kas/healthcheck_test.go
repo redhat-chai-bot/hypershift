@@ -193,7 +193,7 @@ func TestGetHealthcheckEndpoint(t *testing.T) {
 				defer os.Unsetenv("MANAGED_SERVICE")
 			}
 
-			endpoint, port, err := GetHealthcheckEndpointForRoute(tc.route, tc.hcp)
+			endpoint, port, err := GetHealthcheckEndpointForRoute(tc.route, tc.hcp, nil)
 
 			if len(tc.expectedErrorSubstrings) > 0 {
 				g.Expect(err).To(HaveOccurred())

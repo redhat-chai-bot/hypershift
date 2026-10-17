@@ -5146,7 +5146,7 @@ func TestHealthCheckKASEndpoint(t *testing.T) {
 				cancel()
 			}
 
-			err = healthCheckKASEndpoint(ctx, host, port, nil)
+			err = healthCheckKASEndpoint(ctx, host, port, nil, nil)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 				if tt.errSubstr != "" {
@@ -5160,7 +5160,7 @@ func TestHealthCheckKASEndpoint(t *testing.T) {
 
 	t.Run("When the ingress point contains invalid characters, it should return a request creation error", func(t *testing.T) {
 		g := NewWithT(t)
-		err := healthCheckKASEndpoint(t.Context(), "host\x7f", 443, nil)
+		err := healthCheckKASEndpoint(t.Context(), "host\x7f", 443, nil, nil)
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("invalid control character"))
 	})
@@ -5353,7 +5353,7 @@ func TestHealthCheckKASEndpointMetrics(t *testing.T) {
 		m := newTestKASHealthMetrics(t)
 		host, port := parseHostPort(t, server)
 
-		err := healthCheckKASEndpoint(t.Context(), host, port, m)
+		err := healthCheckKASEndpoint(t.Context(), host, port, m, nil)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(prometheustestutil.ToFloat64(m.Available)).To(Equal(float64(1)))
 		g.Expect(prometheustestutil.CollectAndCount(m.RequestDuration)).To(Equal(1))
@@ -5370,7 +5370,7 @@ func TestHealthCheckKASEndpointMetrics(t *testing.T) {
 		m := newTestKASHealthMetrics(t)
 		host, port := parseHostPort(t, server)
 
-		err := healthCheckKASEndpoint(t.Context(), host, port, m)
+		err := healthCheckKASEndpoint(t.Context(), host, port, m, nil)
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(prometheustestutil.ToFloat64(m.Available)).To(Equal(float64(0)))
 		g.Expect(prometheustestutil.CollectAndCount(m.RequestDuration)).To(Equal(1))
@@ -5381,7 +5381,7 @@ func TestHealthCheckKASEndpointMetrics(t *testing.T) {
 
 		m := newTestKASHealthMetrics(t)
 
-		err := healthCheckKASEndpoint(t.Context(), "192.0.2.1", 1, m)
+		err := healthCheckKASEndpoint(t.Context(), "192.0.2.1", 1, m, nil)
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(prometheustestutil.ToFloat64(m.Available)).To(Equal(float64(0)))
 		g.Expect(prometheustestutil.CollectAndCount(m.RequestDuration)).To(Equal(1))
@@ -5396,7 +5396,7 @@ func TestHealthCheckKASEndpointMetrics(t *testing.T) {
 		defer server.Close()
 
 		host, port := parseHostPort(t, server)
-		err := healthCheckKASEndpoint(t.Context(), host, port, nil)
+		err := healthCheckKASEndpoint(t.Context(), host, port, nil, nil)
 		g.Expect(err).NotTo(HaveOccurred())
 	})
 }

@@ -10,10 +10,12 @@ import (
 	"github.com/openshift/hypershift/support/netutil"
 
 	routev1 "github.com/openshift/api/route/v1"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // GetHealthcheckEndpoint determines the appropriate endpoint and port for healthcheck based on the route and configuration
-func GetHealthcheckEndpointForRoute(externalRoute *routev1.Route, hcp *hyperv1.HostedControlPlane) (endpoint string, port int, err error) {
+func GetHealthcheckEndpointForRoute(externalRoute *routev1.Route, hcp *hyperv1.HostedControlPlane, routerService *corev1.Service) (endpoint string, port int, err error) {
 	statusWriter := externalRoute.Annotations[netutil.RouteStatusWriterAnnotation]
 	if statusWriter == "" {
 		statusWriter = "(none)"
@@ -32,6 +34,16 @@ func GetHealthcheckEndpointForRoute(externalRoute *routev1.Route, hcp *hyperv1.H
 
 	endpoint = externalRoute.Status.Ingress[0].RouterCanonicalHostname
 	port = 443
+	if netutil.HCPRouterNodePort(hcp) != nil && !netutil.UseSharedIngressHCP(hcp) {
+		if routerService != nil && routerService.Spec.Type == corev1.ServiceTypeNodePort {
+			for _, servicePort := range routerService.Spec.Ports {
+				if servicePort.Name == "https" && servicePort.NodePort > 0 {
+					return endpoint, int(servicePort.NodePort), nil
+				}
+			}
+		}
+		return "", 0, fmt.Errorf("router HTTPS NodePort is not yet allocated")
+	}
 
 	if netutil.UseSharedIngressHCP(hcp) {
 		endpoint = externalRoute.Spec.Host

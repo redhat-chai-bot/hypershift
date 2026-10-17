@@ -89,6 +89,7 @@ import (
 	karpenterutil "github.com/openshift/hypershift/support/karpenter"
 	"github.com/openshift/hypershift/support/metrics"
 	"github.com/openshift/hypershift/support/netutil"
+	"github.com/openshift/hypershift/support/publishing"
 	"github.com/openshift/hypershift/support/reconcilerpolicy"
 	"github.com/openshift/hypershift/support/releaseinfo"
 	"github.com/openshift/hypershift/support/statuspatching"
@@ -188,6 +189,7 @@ type HostedControlPlaneReconciler struct {
 	DefaultIngressDomain                    string
 	MetricsSet                              metrics.MetricsSet
 	KASHealthMetrics                        *kas.KASHealthMetrics
+	kasHealthCheckHTTPClient                *http.Client
 	SREConfigHash                           string
 	ec2Client                               awsapi.EC2API
 	awsSession                              *aws.Config
@@ -1005,9 +1007,9 @@ func (r *HostedControlPlaneReconciler) healthCheckKASLoadBalancers(ctx context.C
 		// When the cluster is private, checking the load balancers will depend on whether the load balancer is
 		// using the right subnets. To avoid uncertainty, we'll limit the check to the service endpoint.
 		if hcp.Spec.Platform.Type == hyperv1.IBMCloudPlatform {
-			return healthCheckKASEndpoint(ctx, cpomanifests.KubeAPIServerService("").Name, config.KASSVCIBMCloudPort, r.KASHealthMetrics)
+			return healthCheckKASEndpoint(ctx, cpomanifests.KubeAPIServerService("").Name, config.KASSVCIBMCloudPort, r.KASHealthMetrics, r.kasHealthCheckHTTPClient)
 		}
-		return healthCheckKASEndpoint(ctx, cpomanifests.KubeAPIServerService("").Name, config.KASSVCPort, r.KASHealthMetrics)
+		return healthCheckKASEndpoint(ctx, cpomanifests.KubeAPIServerService("").Name, config.KASSVCPort, r.KASHealthMetrics, r.kasHealthCheckHTTPClient)
 	case serviceStrategy.Type == hyperv1.Route:
 		if hcp.Spec.Platform.Type != hyperv1.IBMCloudPlatform {
 			externalRoute := cpomanifests.KubeAPIServerExternalPublicRoute(hcp.Namespace)
@@ -1015,11 +1017,18 @@ func (r *HostedControlPlaneReconciler) healthCheckKASLoadBalancers(ctx context.C
 				return fmt.Errorf("failed to get kube apiserver external route: %w", err)
 			}
 
-			endpoint, port, err := kas.GetHealthcheckEndpointForRoute(externalRoute, hcp)
+			var routerService *corev1.Service
+			if netutil.HCPRouterNodePort(hcp) != nil && !netutil.UseSharedIngressHCP(hcp) {
+				routerService = cpomanifests.RouterPublicService(hcp.Namespace)
+				if err := r.Get(ctx, client.ObjectKeyFromObject(routerService), routerService); err != nil {
+					return fmt.Errorf("failed to get router NodePort service: %w", err)
+				}
+			}
+			endpoint, port, err := kas.GetHealthcheckEndpointForRoute(externalRoute, hcp, routerService)
 			if err != nil {
 				return err
 			}
-			return healthCheckKASEndpoint(ctx, endpoint, port, r.KASHealthMetrics)
+			return healthCheckKASEndpoint(ctx, endpoint, port, r.KASHealthMetrics, r.kasHealthCheckHTTPClient)
 		}
 	case serviceStrategy.Type == hyperv1.LoadBalancer:
 		svc := cpomanifests.KubeAPIServerService(hcp.Namespace)
@@ -1055,15 +1064,17 @@ func (r *HostedControlPlaneReconciler) healthCheckKASLoadBalancers(ctx context.C
 		} else if LBIngress.IP != "" {
 			ingressPoint = LBIngress.IP
 		}
-		return healthCheckKASEndpoint(ctx, ingressPoint, port, r.KASHealthMetrics)
+		return healthCheckKASEndpoint(ctx, ingressPoint, port, r.KASHealthMetrics, r.kasHealthCheckHTTPClient)
 	}
 	return nil
 }
 
-func healthCheckKASEndpoint(ctx context.Context, ingressPoint string, port int, metrics *kas.KASHealthMetrics) error {
-	healthEndpoint := fmt.Sprintf("https://%s:%d/healthz?verbose", ingressPoint, port)
+func healthCheckKASEndpoint(ctx context.Context, ingressPoint string, port int, metrics *kas.KASHealthMetrics, httpClient *http.Client) error {
+	healthEndpoint := "https://" + net.JoinHostPort(ingressPoint, strconv.Itoa(port)) + "/healthz?verbose"
 
-	httpClient := util.InsecureHTTPClient()
+	if httpClient == nil {
+		httpClient = util.InsecureHTTPClient()
+	}
 	httpClient.Timeout = 10 * time.Second
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthEndpoint, nil)
@@ -1155,7 +1166,11 @@ func (r *HostedControlPlaneReconciler) controlPlaneComponentsAvailable(ctx conte
 }
 
 func (r *HostedControlPlaneReconciler) validateConfigAndClusterCapabilities(ctx context.Context, hcp *hyperv1.HostedControlPlane) error {
-	for _, svc := range hcp.Spec.Services {
+	services, err := publishing.ServicesForHCP(hcp)
+	if err != nil {
+		return fmt.Errorf("invalid service publishing configuration: %w", err)
+	}
+	for _, svc := range services {
 		if svc.Type == hyperv1.Route && !r.ManagementClusterCapabilities.Has(capabilities.CapabilityRoute) {
 			return fmt.Errorf("cluster does not support Routes, but service %q is exposed via a Route", svc.Service)
 		}

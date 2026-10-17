@@ -31,6 +31,7 @@ import (
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"github.com/openshift/hypershift/support/azureutil"
 	"github.com/openshift/hypershift/support/k8sutil"
+	"github.com/openshift/hypershift/support/publishing"
 	"github.com/openshift/hypershift/support/upsert"
 
 	corev1 "k8s.io/api/core/v1"
@@ -146,8 +147,12 @@ func (r *AzurePrivateLinkServiceObserver) reconcileAzurePrivateLinkService(ctx c
 	if azurePlatform.Private.Type == "" {
 		return fmt.Errorf("HostedControlPlane %s/%s does not have Azure private connectivity config", hcp.Namespace, hcp.Name)
 	}
+	services, err := publishing.ServicesForHCP(hcp)
+	if err != nil {
+		return fmt.Errorf("invalid service publishing configuration: %w", err)
+	}
 
-	_, err := r.CreateOrUpdate(ctx, r.Client, azurePLS, func() error {
+	_, err = r.CreateOrUpdate(ctx, r.Client, azurePLS, func() error {
 		// Set OwnerReference to HostedControlPlane for lifecycle management
 		if err := controllerutil.SetControllerReference(hcp, azurePLS, r.Scheme()); err != nil {
 			return fmt.Errorf("failed to set controller reference: %w", err)
@@ -173,7 +178,7 @@ func (r *AzurePrivateLinkServiceObserver) reconcileAzurePrivateLinkService(ctx c
 		// Derive the base domain for private DNS from the OAuth route hostname.
 		// The OAuth hostname is "oauth-<name>.<externalDNSDomain>" which may differ
 		// from the HC base domain when external DNS is configured with a subdomain.
-		if baseDomain := baseDomainFromServices(hcp.Spec.Services, hcp.Name); baseDomain != "" {
+		if baseDomain := baseDomainFromServices(services, hcp.Name); baseDomain != "" {
 			azurePLS.Spec.BaseDomain = baseDomain
 		} else if hcp.Spec.DNS.BaseDomain != "" {
 			azurePLS.Spec.BaseDomain = hcp.Spec.DNS.BaseDomain

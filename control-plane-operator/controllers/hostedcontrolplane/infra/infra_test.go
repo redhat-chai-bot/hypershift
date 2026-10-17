@@ -338,6 +338,7 @@ func simulateRouteAdmitted(ctx context.Context, c client.Client, route *routev1.
 }
 
 func TestReconcileInfrastructure(t *testing.T) {
+	t.Run("When publishing is the only source, it should reconcile control plane infrastructure", testPublishingInfrastructure)
 	const (
 		testRouterLBHostname     = "router.test.elb.amazonaws.com"
 		testKASLBHostname        = "kas.test.elb.amazonaws.com"
@@ -1265,6 +1266,8 @@ func TestReconcileOAuthService(t *testing.T) {
 }
 
 func TestReconcileAPIServerService(t *testing.T) {
+	t.Run("When ingress is PlatformProvided, it should preserve API Route ownership", testReconcileAPIServerServicePlatformProvidedOwnership)
+	t.Run("When an old CPO receives Agent PlatformProvided legacy services, it should reproduce the nonrepresentable owned Route and pending LoadBalancer", testReconcileAPIServerServiceLegacyAgentPlatformProvided)
 	t.Parallel()
 	targetNamespace := "test"
 	apiPort := int32(config.KASSVCPort)
@@ -1620,6 +1623,7 @@ func TestReconcileAPIServerService(t *testing.T) {
 }
 
 func TestReconcileHCPRouterServices(t *testing.T) {
+	t.Run("When publishing is configured, it should reconcile preset router services", testPublishingRouterServices)
 	const namespace = "test-ns"
 	publicService := func(m ...func(*corev1.Service)) *corev1.Service {
 		svc := corev1.Service{

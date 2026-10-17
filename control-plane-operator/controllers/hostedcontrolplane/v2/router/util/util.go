@@ -13,6 +13,16 @@ import (
 //
 // Excludes IBM Cloud platform.
 func UseHCPRouter(hcp *hyperv1.HostedControlPlane) bool {
+	if policy := netutil.PublishingForHCP(hcp); policy != nil && !netutil.UseSharedIngressHCP(hcp) && !netutil.UseSwiftNetworkingHCP(hcp) {
+		switch policy.Type {
+		case hyperv1.ServicePublishingSingleIngressPoint:
+			return netutil.IsPrivateHCP(hcp) || policy.SingleIngressPoint.Exposure != hyperv1.IngressExposurePlatformProvided
+		case hyperv1.ServicePublishingDedicatedAPIServerEndpoint:
+			return netutil.IsPrivateHCP(hcp)
+		case hyperv1.ServicePublishingNodePort:
+			return false
+		}
+	}
 	if hcp.Spec.Platform.Type == hyperv1.IBMCloudPlatform {
 		return false
 	}

@@ -22,6 +22,56 @@ func hcpRouterLabels() map[string]string {
 }
 
 func ReconcileRouterService(svc *corev1.Service, internal, crossZoneLoadBalancingEnabled bool, hcp *hyperv1.HostedControlPlane) error {
+	reconcileRouterServicePlatformAnnotations(svc, internal, crossZoneLoadBalancingEnabled, hcp)
+
+	if svc.Labels == nil {
+		svc.Labels = map[string]string{}
+	}
+	for k, v := range hcpRouterLabels() {
+		svc.Labels[k] = v
+	}
+	reconcileRouterServiceExposure(svc, internal, hcp)
+	svc.Spec.Selector = hcpRouterLabels()
+	foundHTTPS := false
+
+	for i, port := range svc.Spec.Ports {
+		switch port.Name {
+		case "https":
+			svc.Spec.Ports[i].Port = 443
+			svc.Spec.Ports[i].TargetPort = intstr.FromString("https")
+			svc.Spec.Ports[i].Protocol = corev1.ProtocolTCP
+			foundHTTPS = true
+		}
+	}
+	if !foundHTTPS {
+		svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{
+			Name:       "https",
+			Port:       443,
+			TargetPort: intstr.FromString("https"),
+			Protocol:   corev1.ProtocolTCP,
+		})
+	}
+	if nodePort := netutil.HCPRouterNodePort(hcp); nodePort != nil && nodePort.Port != 0 {
+		for index := range svc.Spec.Ports {
+			if svc.Spec.Ports[index].Name == "https" {
+				svc.Spec.Ports[index].NodePort = nodePort.Port
+			}
+		}
+	}
+
+	// Apply LoadBalancerSourceRanges for external router services to restrict CIDR access
+	// Only apply for external (non-internal) services and when not running on ARO HCP
+	allowedCIDRBlocks := netutil.AllowedCIDRBlocks(hcp)
+	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && !internal && !azureutil.IsAroHCPByHCP(hcp) {
+		svc.Spec.LoadBalancerSourceRanges = allowedCIDRBlocks
+	}
+
+	return nil
+}
+
+// reconcileRouterServicePlatformAnnotations applies the per-platform load balancer annotations the
+// router Service needs.
+func reconcileRouterServicePlatformAnnotations(svc *corev1.Service, internal, crossZoneLoadBalancingEnabled bool, hcp *hyperv1.HostedControlPlane) {
 	if hcp.Spec.Platform.Type == hyperv1.AWSPlatform {
 		if svc.Annotations == nil {
 			svc.Annotations = map[string]string{}
@@ -66,43 +116,31 @@ func ReconcileRouterService(svc *corev1.Service, internal, crossZoneLoadBalancin
 			svc.Annotations[azureutil.InternalLoadBalancerAnnotation] = azureutil.InternalLoadBalancerValue
 		}
 	}
+}
 
-	if svc.Labels == nil {
-		svc.Labels = map[string]string{}
-	}
-	for k, v := range hcpRouterLabels() {
-		svc.Labels[k] = v
-	}
+// reconcileRouterServiceExposure selects the Service type for the router and keeps the
+// LoadBalancer-only fields consistent with the requested publishing exposure.
+func reconcileRouterServiceExposure(svc *corev1.Service, internal bool, hcp *hyperv1.HostedControlPlane) {
 	svc.Spec.Type = corev1.ServiceTypeLoadBalancer
-	svc.Spec.Selector = hcpRouterLabels()
-	foundHTTPS := false
-
-	for i, port := range svc.Spec.Ports {
-		switch port.Name {
-		case "https":
-			svc.Spec.Ports[i].Port = 443
-			svc.Spec.Ports[i].TargetPort = intstr.FromString("https")
-			svc.Spec.Ports[i].Protocol = corev1.ProtocolTCP
-			foundHTTPS = true
+	if nodePort := netutil.HCPRouterNodePort(hcp); nodePort != nil {
+		svc.Spec.Type = corev1.ServiceTypeNodePort
+		svc.Spec.LoadBalancerSourceRanges = nil
+		svc.Spec.LoadBalancerClass = nil
+		svc.Spec.AllocateLoadBalancerNodePorts = nil
+		svc.Spec.HealthCheckNodePort = 0
+		svc.Spec.LoadBalancerIP = ""
+		delete(svc.Annotations, hyperv1.ExternalDNSHostnameAnnotation)
+	}
+	if netutil.HCPRouterExposure(hcp) == hyperv1.IngressExposureLoadBalancer {
+		if svc.Annotations == nil {
+			svc.Annotations = map[string]string{}
+		}
+		if loadBalancer := hcp.Spec.Publishing.SingleIngressPoint.LoadBalancer; loadBalancer != nil && loadBalancer.Hostname != "" && (!internal || !netutil.IsPublicHCP(hcp)) {
+			svc.Annotations[hyperv1.ExternalDNSHostnameAnnotation] = loadBalancer.Hostname
+		} else {
+			delete(svc.Annotations, hyperv1.ExternalDNSHostnameAnnotation)
 		}
 	}
-	if !foundHTTPS {
-		svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{
-			Name:       "https",
-			Port:       443,
-			TargetPort: intstr.FromString("https"),
-			Protocol:   corev1.ProtocolTCP,
-		})
-	}
-
-	// Apply LoadBalancerSourceRanges for external router services to restrict CIDR access
-	// Only apply for external (non-internal) services and when not running on ARO HCP
-	allowedCIDRBlocks := netutil.AllowedCIDRBlocks(hcp)
-	if !internal && !azureutil.IsAroHCPByHCP(hcp) {
-		svc.Spec.LoadBalancerSourceRanges = allowedCIDRBlocks
-	}
-
-	return nil
 }
 
 func ReconcileRouteStatus(route *routev1.Route, externalHostname, internalHostname string) {
