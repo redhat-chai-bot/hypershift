@@ -28,6 +28,7 @@ import (
 const (
 	nodePoolAnnotation       = "hypershift.openshift.io/nodePool"
 	labelsSyncedAnnotation   = "hypershift.openshift.io/labelsSynced"
+	taintsSyncedAnnotation   = "hypershift.openshift.io/taintsSynced"
 	nodePoolAnnotationTaints = "hypershift.openshift.io/nodePoolTaints"
 	labelManagedPrefix       = "managed.hypershift.openshift.io"
 )
@@ -79,20 +80,35 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 	}
+	// Collapse duplicate (key, effect) identities with the same last-value-wins
+	// semantics mergeTaints applies to the Node, so the sync hashes describe the
+	// effective desired taints rather than their order in the annotation.
+	taints = mergeTaints(nil, taints)
 
+	// labelsSynced keeps hashing labels and taints together, as earlier releases
+	// did, so existing Nodes without duplicate taints keep a matching value and
+	// an earlier release reading it after a rollback sees no change.
 	expectedHash, err := computeSyncHash(labelsToSync, taints)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to compute sync hash: %w", err)
 	}
-	if labelsHaveSynced(node, expectedHash) {
+	expectedTaintsHash, err := computeSyncHash(nil, taints)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to compute taints sync hash: %w", err)
+	}
+	if labelsHaveSynced(node, expectedHash) && node.Annotations[taintsSyncedAnnotation] == expectedTaintsHash {
 		return reconcile.Result{}, nil
 	}
 
 	result, err := r.CreateOrUpdate(ctx, r.guestClusterClient, node, func() error {
+		// Decide before recording the new hashes, using the Node as just read.
+		syncTaints := taintsNeedSync(node, expectedHash, expectedTaintsHash)
+
 		if node.Annotations == nil {
 			node.Annotations = make(map[string]string)
 		}
 		node.Annotations[labelsSyncedAnnotation] = expectedHash
+		node.Annotations[taintsSyncedAnnotation] = expectedTaintsHash
 
 		if node.Labels == nil {
 			node.Labels = make(map[string]string)
@@ -102,7 +118,11 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		// may have labels set by kubelet, autoscaler, or other controllers.
 		maps.Copy(node.Labels, labelsToSync)
 
-		node.Spec.Taints = mergeTaints(node.Spec.Taints, taints)
+		// Label backfill must not restore taints that were intentionally
+		// removed from the Node, so taints are merged only when they need sync.
+		if syncTaints {
+			node.Spec.Taints = mergeTaints(node.Spec.Taints, taints)
+		}
 
 		return nil
 	})
@@ -156,6 +176,32 @@ func labelsHaveSynced(node *corev1.Node, expectedHash string) bool {
 		return false
 	}
 	return val == expectedHash
+}
+
+// taintsNeedSync reports whether the desired taints should be merged into the
+// Node, so that taints removed from the Node on purpose are restored only on
+// its initial sync or when the desired taints change. It returns:
+//   - false when labelsSynced matches expectedHash, because that value is only
+//     recorded once these exact desired taints have been handled;
+//   - whether taintsSynced differs from expectedTaintsHash when taintsSynced is
+//     set (non-empty), regardless of labelsSynced;
+//   - otherwise, true when labelsSynced is absent (initial sync) and false for
+//     Nodes initialized before taintsSynced existed.
+//
+// Only hashes are stored, so a desired-taint change re-merges the whole desired
+// set, and a change that is still pending when a Node is first seen without
+// taintsSynced is not applied. Likewise, after a rollback to a release that
+// does not write taintsSynced, a stale taintsSynced re-merges the desired set
+// if that release merged new taints and the labels changed since.
+func taintsNeedSync(node *corev1.Node, expectedHash, expectedTaintsHash string) bool {
+	if labelsHaveSynced(node, expectedHash) {
+		return false
+	}
+	if previous := node.Annotations[taintsSyncedAnnotation]; previous != "" {
+		return previous != expectedTaintsHash
+	}
+	_, initialized := node.Annotations[labelsSyncedAnnotation]
+	return !initialized
 }
 
 type syncState struct {
